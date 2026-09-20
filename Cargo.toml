@@ -1,0 +1,119 @@
+[package]
+name = "aimer_cli"
+version = "0.4.1+1"
+edition = "2024"
+resolver = "3"
+
+[features]
+# Opt in to integration tests that build and execute generated hot-reload guests.
+hot-reload = []
+
+
+[[bin]]
+name = "aimer"
+path = "src/main.rs"
+
+
+[lib]
+name = "aimer_cli"
+path = "src/lib.rs"
+
+[dependencies]
+aimer_reload_protocol.workspace = true
+aimer_hot_reload.workspace = true
+
+# Non-local
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
+dirs.workspace = true
+uuid.workspace = true
+rmcp.workspace = true
+ansi-to-tui.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+ctrlc.workspace = true
+inquire.workspace = true
+ratatui.workspace = true
+arboard.workspace = true
+colored.workspace = true
+crossbeam.workspace = true
+clap_complete.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+sha2.workspace = true
+hex.workspace = true
+wasmparser.workspace = true
+walrus.workspace = true
+zeroize.workspace = true
+syn.workspace = true
+quote.workspace = true
+wasm-bindgen-cli-support.workspace = true
+notify.workspace = true
+proc-macro2.workspace = true
+
+
+[dev-dependencies]
+aimer_reload_server.workspace = true
+tempfile.workspace = true
+
+
+[build-dependencies]
+chrono.workspace = true
+
+
+[workspace]
+members = [".", "aimer_hot_reload", "aimer_reload_protocol", "aimer_reload_server"]
+
+
+
+[workspace.dependencies]
+
+aimer_reload_protocol = { path = "aimer_reload_protocol" }
+aimer_reload_server = { path = "aimer_reload_server" }
+aimer_hot_reload = { path = "aimer_hot_reload" }
+
+# Crates.io dependencies
+
+chrono = "0.4.45"
+crossbeam = "0.8.4"
+tokio = "1.52.3"
+futures-util = "0.3.31"
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-native-roots"] }
+serde = { version = "1.0.228", features = ["default", "derive"] }
+serde_json = "1.0.150"
+uuid = { version = "1.23.5", features = ["js", "v4", "serde"] }
+dirs = "6.0.0"
+walrus = "0.26.5"
+wasmparser = { version = "0.239.0", default-features = false }
+rmcp = { version = "3.2.0", features = ["transport-io"] }
+colored = "3.1.1"
+crossterm = "0.29.0"
+ctrlc = "3.5.2"
+clap = { version = "4.6.1", features = ["derive"] }
+inquire = "0.9.4"
+ratatui = "0.30.2"
+ansi-to-tui = "8.0.1"
+arboard = "3.6.1"
+clap_complete = { version = "4.6.7", features = ["unstable-dynamic"] }
+notify = "9.0.0-rc.4"
+thiserror = "2.0.18"
+anyhow = "1.0.103"
+toml = "1.1.2+spec-1.1.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tempfile = "3.27.0"
+sha2 = "0.11.0"
+hex = "0.4.3"
+ring = "0.17.14"
+subtle = "2.6.1"
+zeroize = "1.8.2"
+syn = { version = "2.0.118", features = ["full", "visit", "visit-mut"] }
+quote = "1.0.47"
+wasm-bindgen-cli-support = "0.2.128"
+proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
