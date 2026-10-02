@@ -731,6 +731,12 @@ pub fn start(
                     }
                 }
                 ConsoleAction::HotRestart => {
+                    if let Some(control_session) = control_session.as_ref()
+                        && control_session.begin_next_run().is_err()
+                    {
+                        session.notice("Restart is busy; try again shortly".to_string());
+                        continue;
+                    }
                     if let Some(mut child) = current_child.lock().unwrap().take() {
                         let _ = child.kill();
                     }
@@ -747,7 +753,15 @@ pub fn start(
                     );
                 }
                 ConsoleAction::SelectPane(pane) => select_pane(&mut session, pane),
-                ConsoleAction::NextPane => session.state.next_pane(),
+                ConsoleAction::NextPane => {
+                    session.state.pane = match session.state.pane {
+                        super::ConsoleType::App => super::ConsoleType::Build,
+                        super::ConsoleType::Build => super::ConsoleType::Inspector,
+                        super::ConsoleType::Inspector | super::ConsoleType::ResourceMonitor => {
+                            super::ConsoleType::App
+                        }
+                    }
+                }
                 ConsoleAction::ToggleInspector => {
                     inspector_handle.send_toggle();
                     session.state.pane = super::ConsoleType::Inspector;
@@ -769,6 +783,7 @@ pub fn start(
                     super::ConsoleType::App => session.state.app_logs.clear(),
                     super::ConsoleType::Build => session.state.build_logs.clear(),
                     super::ConsoleType::Inspector => {}
+                    super::ConsoleType::ResourceMonitor => {}
                 },
                 ConsoleAction::ScrollUp | ConsoleAction::PageUp => {
                     let count = if matches!(action, ConsoleAction::PageUp) { 10 } else { 1 };
@@ -812,6 +827,7 @@ fn copy_focused_pane(session: &InlineSession) {
         super::ConsoleType::App => session.state.app_log_text(),
         super::ConsoleType::Build => session.state.build_log_text(),
         super::ConsoleType::Inspector => return,
+        super::ConsoleType::ResourceMonitor => return,
     };
     if let Ok(mut clipboard) = Clipboard::new() {
         let _ = clipboard.set_text(text);

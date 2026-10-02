@@ -8,12 +8,86 @@ use serde::{Deserialize, Serialize};
 struct UserConfig {
     #[serde(default)]
     mcp: Option<McpConfig>,
+    #[serde(default)]
+    resource_monitor: Option<ResourceMonitorUserConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct McpConfig {
     #[serde(default = "default_true")]
     auto_start: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct ResourceMonitorUserConfig {
+    #[serde(default = "default_resource_sample_interval_ms")]
+    sample_interval_ms: u64,
+    #[serde(default = "default_resource_retention_days")]
+    retention_days: u32,
+}
+
+/// Global settings for sampling and retaining running-app resource readings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceMonitorConfig {
+    /// Sample cadence in milliseconds, constrained to 500–3000 ms.
+    pub sample_interval_ms: u64,
+    /// Number of days completed and active recordings are retained.
+    pub retention_days: u32,
+}
+
+impl Default for ResourceMonitorConfig {
+    fn default() -> Self {
+        Self {
+            sample_interval_ms: default_resource_sample_interval_ms(),
+            retention_days: default_resource_retention_days(),
+        }
+    }
+}
+
+const fn default_resource_sample_interval_ms() -> u64 {
+    1_000
+}
+
+const fn default_resource_retention_days() -> u32 {
+    30
+}
+
+/// Load global resource-monitor settings from `~/.aimer/config.toml`.
+///
+/// Invalid optional settings fall back to defaults so they cannot prevent an
+/// application from starting.
+pub fn resource_monitor_config() -> ResourceMonitorConfig {
+    let Some(home) = dirs::home_dir() else {
+        return ResourceMonitorConfig::default();
+    };
+    let path = home.join(".aimer/config.toml");
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return ResourceMonitorConfig::default();
+    };
+    match resource_monitor_config_from(&contents) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::debug!(error = %error, "ignoring invalid resource monitor configuration");
+            ResourceMonitorConfig::default()
+        }
+    }
+}
+
+fn resource_monitor_config_from(contents: &str) -> Result<ResourceMonitorConfig, String> {
+    let config: UserConfig = toml::from_str(contents).map_err(|error| error.to_string())?;
+    let Some(settings) = config.resource_monitor else {
+        return Ok(ResourceMonitorConfig::default());
+    };
+    if !(500..=3_000).contains(&settings.sample_interval_ms) {
+        return Err("resource_monitor.sample_interval_ms must be between 500 and 3000".into());
+    }
+    if !(1..=3_650).contains(&settings.retention_days) {
+        return Err("resource_monitor.retention_days must be between 1 and 3650".into());
+    }
+    Ok(ResourceMonitorConfig {
+        sample_interval_ms: settings.sample_interval_ms,
+        retention_days: settings.retention_days,
+    })
 }
 
 fn default_true() -> bool {
@@ -363,6 +437,36 @@ mod tests {
         assert!(mcp_auto_start_from("[mcp]\nauto_start = true\n"));
         assert!(mcp_auto_start_from("[other]\nvalue = 1\n"));
         assert!(mcp_auto_start_from("not valid toml"));
+    }
+
+    #[test]
+    fn resource_monitor_config_uses_defaults_and_reads_global_values() {
+        assert_eq!(
+            resource_monitor_config_from("[other]\nvalue = 1\n").unwrap(),
+            ResourceMonitorConfig::default()
+        );
+        assert_eq!(
+            resource_monitor_config_from(
+                "[resource_monitor]\nsample_interval_ms = 1500\nretention_days = 14\n"
+            )
+            .unwrap(),
+            ResourceMonitorConfig {
+                sample_interval_ms: 1500,
+                retention_days: 14,
+            }
+        );
+    }
+
+    #[test]
+    fn resource_monitor_config_rejects_out_of_range_values() {
+        assert!(resource_monitor_config_from(
+            "[resource_monitor]\nsample_interval_ms = 499\n"
+        )
+        .is_err());
+        assert!(resource_monitor_config_from(
+            "[resource_monitor]\nretention_days = 3651\n"
+        )
+        .is_err());
     }
 
     #[test]

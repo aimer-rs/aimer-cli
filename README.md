@@ -73,7 +73,7 @@ bundling, and release packaging across desktop, mobile, and web targets.
 - **Multi-Platform Native Support**: Seamlessly build and run apps on macOS, iOS, Android, Linux, Windows, and
   WebAssembly.
 - **Interactive Developer TUI**: Rich terminal interface (via Ratatui) providing unified application logs, build
-  outputs, widget inspection, and hotkeys.
+  outputs, widget inspection, live app resource usage, and hotkeys.
 - **Live Device Discovery**: Automatically detects connected Android devices (`adb`), iOS devices/simulators (`xcrun`),
   host desktops, and web browsers.
 - **Model Context Protocol (MCP)**: Native stdio MCP server for AI coding assistants (Claude Code, Cursor, Codex) to
@@ -375,8 +375,9 @@ aimer completions <SHELL> [--install]
 
 ### `aimer mcp`
 
-Runs an MCP (Model Context Protocol) stdio server connected to a running Aimer session, or installs the MCP
-configuration into supported AI coding agents.
+Runs an MCP (Model Context Protocol) stdio server for the current project's live session, resource history, and crate
+documentation, or installs the MCP configuration into supported AI coding agents. Use `--attach` to select a specific
+live session when the project has more than one.
 
 ```bash
 # Install MCP into AI agents:
@@ -417,6 +418,7 @@ When running `aimer run`, Aimer launches an interactive terminal interface (TUI)
 | `1`                    | **App Pane**         | Focuses the Application log output pane              |
 | `2`                    | **Build Pane**       | Focuses the Compiler / Build output pane             |
 | `3`                    | **Inspector Pane**   | Focuses the Widget Inspector pane                    |
+| `4`                    | **Resource Monitor** | Shows live CPU, GPU, memory, PID, and thread metrics  |
 | `Tab`                  | **Next Pane**        | Cycles focus between available panes                 |
 | `F12`                  | **Toggle Inspector** | Opens or hides the Widget Inspector view             |
 | `t`                    | **Toggle Tree**      | Toggles the Widget Inspector full-tree view          |
@@ -468,6 +470,43 @@ Once connected, your AI assistant can execute the following tools:
 - `aimer_stop_project`: Stop the running project session.
 - `aimer_get_logs`: Fetch bounded build, app, or system logs with cursor pagination and source code locations.
 - `aimer_clear_logs`: Clear retained logs up to a specific sequence boundary.
+- `aimer_get_resource_usage`: Read the latest app CPU, GPU, memory, PID, and thread sample.
+- `aimer_set_resource_monitor_interval`: Set the live sample interval to 500–3000 ms; omit `interval_ms` to restore the global default.
+- `aimer_record_resource_usage`: Capture a bounded sample window with `duration` in seconds (0.5–300) and `interval` in seconds (0.5–3), then return the samples inline and the run recording ID.
+- `aimer_list_resource_recordings`: List retained per-run resource recordings, including completed app runs.
+- `aimer_get_resource_recording`: Read paginated samples from a prior run.
+- `aimer_get_crate_docs`: Read crate or item documentation from docs.rs. A trait lookup includes its rendered declaration, method signatures, required/provided status, and each method's documentation. The tool resolves an omitted version from the attached project's `Cargo.lock` and caches the crate's Rustdoc JSON index for offline lookups.
+- `aimer_search_crate_docs`: Search public item names, paths, and documentation text within a crate. Results include item paths and short documentation summaries; pass a result's path to `aimer_get_crate_docs` to read the full item documentation.
+
+The same docs.rs features are available directly from the CLI. It prints JSON, which makes the output easy to pipe into other tools:
+
+```bash
+# Read a crate's root documentation or a specific item
+aimer docs serde
+aimer docs serde de::Deserialize
+
+# Search item names, paths, and documentation in a crate
+aimer docs serde --search Deserialize --limit 10
+
+# Select a version when it is not in the current project's Cargo.lock
+aimer docs serde --search Deserialize --version 1.0.229
+```
+
+For trait results, the top-level `documentation` field contains the expanded trait description. `trait_details` contains `signature`, a Rust-like `definition`, and `methods` entries with each method's `name`, `signature`, `required` flag, and `documentation`.
+
+The docs.rs cache is stored under `~/.aimer/docs/docs.rs`, with each crate version in its own subdirectory. It keeps the original gzip download and a zstd-compressed JSON copy for offline reads. Documentation is fetched on first use, so an uncached crate version requires an internet connection once.
+
+### Resource monitoring
+
+The TUI's Resource Monitor pane is available with `4` or `Tab`. Aimer samples the running app automatically and records each run under `~/.aimer/resource-recordings`; completed recordings are kept for 30 days by default and can be read later with the MCP tools above. The `aimer_record_resource_usage` tool temporarily applies the requested interval, waits for the duration, restores the previous interval, and returns that window's samples inline. It also returns the run recording ID for later paginated reads. The host collector uses `sysinfo` for process CPU and memory on macOS, Windows, and Linux. macOS GPU usage is collected from per-process Apple GPU records when available; Android process readings use the connected device through `adb`. iOS device process counters are unavailable to the host because of device sandboxing. Unavailable fields include a reason in the TUI and recorded data.
+
+Resource settings live in the global `~/.aimer/config.toml`:
+
+```toml
+[resource_monitor]
+sample_interval_ms = 1000 # 500–3000 ms
+retention_days = 30       # 1–3650 days
+```
 
 ---
 

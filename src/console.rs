@@ -195,6 +195,25 @@ fn hit_test(view: &PaneView, col: u16, row: u16) -> Option<(usize, usize)> {
     Some((vr.line, vr.start + within))
 }
 
+/// Hit-test a click without the edge clamping used while dragging a selection.
+fn hit_test_click(
+    view: &PaneView,
+    col: u16,
+    row: u16,
+    screen_width: u16,
+) -> Option<(usize, usize)> {
+    let visible_row = row.saturating_sub(view.y) as usize;
+    if col < view.x
+        || col >= screen_width.saturating_sub(1)
+        || row < view.y
+        || row >= view.y.saturating_add(view.height)
+        || visible_row >= view.visible_rows.len()
+    {
+        return None;
+    }
+    hit_test(view, col, row)
+}
+
 pub fn start(
     device: Device,
     pkg_name: String,
@@ -206,7 +225,7 @@ pub fn start(
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend)?;
     let (tx, rx) = crossbeam::channel::unbounded();
-    let mut state = AppState::new();
+    let mut state = AppState::new_for_tui();
     // Starting inspector server
     let inspector_runtime =
         Runtime::new().context("failed to start inspector server tokio runtime")?;
@@ -406,6 +425,10 @@ pub fn start(
         let inspector_state = inspector_handle.state.snapshot();
         let inspector_address = inspector_handle.get_address();
         terminal.draw(|f| {
+            state.resource_monitor = session
+                .as_ref()
+                .map(|session| session.snapshot().resource_monitor)
+                .unwrap_or_default();
             ui::render(
                 f,
                 &mut state,
@@ -425,6 +448,7 @@ pub fn start(
         // a single event per frame lets the input backlog outgrow the tick on a
         // busy log stream, which is why hotkeys used to need several presses.
         let mut quit = false;
+        let terminal_width = terminal.size()?.width;
         for event in input::drain_terminal(timeout)? {
             match event {
                 Event::Key(key) => {
@@ -441,6 +465,10 @@ pub fn start(
                             state.pane = ConsoleType::Inspector;
                             state.clear_selection();
                         }
+                        (KeyCode::Char('4'), _) => {
+                            state.pane = ConsoleType::ResourceMonitor;
+                            state.clear_selection();
+                        }
                         (KeyCode::Char('Q'), _) | (KeyCode::Char('q'), KeyModifiers::SHIFT) => {
                             // Kill child process if any
                             if let Some(mut child) = current_child.lock().unwrap().take() {
@@ -453,6 +481,11 @@ pub fn start(
                                 file_writer.write_all(b" ")?;
                                 file_writer.set_modified(SystemTime::now())?;
                             } else {
+                                if let Some(session) = session.as_ref()
+                                    && session.begin_next_run().is_err()
+                                {
+                                    continue;
+                                }
                                 // Kill child process if running
                                 if let Some(mut child) = current_child.lock().unwrap().take() {
                                     let _ = child.kill();
@@ -574,6 +607,7 @@ pub fn start(
                         (KeyCode::Up, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_up(1),
                             ConsoleType::App => state.app_pane.scroll_up(1),
+                            ConsoleType::ResourceMonitor => {},
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_sub(1);
                                 if (state.inspector_cursor as u16) < state.inspector_pane.scroll {
@@ -584,6 +618,7 @@ pub fn start(
                         (KeyCode::Down, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_down(1),
                             ConsoleType::App => state.app_pane.scroll_down(1),
+                            ConsoleType::ResourceMonitor => {},
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_add(1);
                             }
@@ -591,6 +626,7 @@ pub fn start(
                         (KeyCode::PageUp, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_up(10),
                             ConsoleType::App => state.app_pane.scroll_up(10),
+                            ConsoleType::ResourceMonitor => {},
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_sub(10);
                                 if (state.inspector_cursor as u16) < state.inspector_pane.scroll {
@@ -601,6 +637,7 @@ pub fn start(
                         (KeyCode::PageDown, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_down(10),
                             ConsoleType::App => state.app_pane.scroll_down(10),
+                            ConsoleType::ResourceMonitor => {},
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_add(10);
                             }
@@ -615,12 +652,28 @@ pub fn start(
                             ConsoleType::Build => state.build_pane.scroll_up(2),
                             ConsoleType::App => state.app_pane.scroll_up(2),
                             ConsoleType::Inspector => state.inspector_pane.scroll_up(2),
+                            ConsoleType::ResourceMonitor => {},
                         },
                         MouseEventKind::ScrollDown => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_down(2),
                             ConsoleType::App => state.app_pane.scroll_down(2),
                             ConsoleType::Inspector => state.inspector_pane.scroll_down(2),
+                            ConsoleType::ResourceMonitor => {},
                         },
+                        // A normal click on an app log row toggles its repeated
+                        // group. In selection mode, the same gesture anchors a
+                        // text selection instead.
+                        MouseEventKind::Down(MouseButton::Left)
+                            if state.pane == ConsoleType::App && !state.selection_mode =>
+                        {
+                            if let Some((line, _)) = state
+                                .last_view
+                                .as_ref()
+                                .and_then(|view| hit_test_click(view, col, row, terminal_width))
+                            {
+                                state.toggle_repeated_app_log_at_row(line);
+                            }
+                        }
                         // Begin a selection at the clicked cell.
                         MouseEventKind::Down(MouseButton::Left) if state.selection_mode => {
                             if let Some(pos) =

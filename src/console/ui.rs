@@ -4,8 +4,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
-use crate::console::state::VisualRow;
 use crate::console::inspector::{InspectorState, render_tree_lines_with_ids};
+use crate::console::state::VisualRow;
 use crate::console::{AppState, ConsoleType, PaneView, Selection, Status};
 
 fn calc_scroll(
@@ -101,6 +101,22 @@ pub fn render(
             }),
         );
 
+    let resource_title = if state.resource_monitor.recording {
+        "Resource Monitor [recording]"
+    } else {
+        "Resource Monitor"
+    };
+    let resource_block = Block::default()
+        .borders(Borders::ALL)
+        .title(resource_title)
+        .border_style(
+            Style::default().fg(if state.pane == ConsoleType::ResourceMonitor {
+                Color::Green
+            } else {
+                Color::White
+            }),
+        );
+
     let area = chunks[0];
     let height = area.height.saturating_sub(2) as usize;
     let width = area.width.saturating_sub(2).max(1) as usize;
@@ -169,13 +185,22 @@ pub fn render(
                 state.app_pane.scroll as usize,
             );
             state.app_pane.scroll = new_scroll;
+            state.last_view = Some(build_row_hit_test_view(
+                state.app_logs.rows(),
+                area.x + 1,
+                area.y + 1,
+                area.width.saturating_sub(2),
+                area.height.saturating_sub(2),
+                start,
+                skip_top,
+            ));
             let p = Paragraph::new(state.app_logs.rows()[start..].to_vec())
                 .block(app_block)
                 .wrap(Wrap { trim: false })
                 .scroll((skip_top, 0));
             f.render_widget(p, area);
         }
-    } else {
+    } else if state.pane == ConsoleType::Inspector {
         // Inspector pane
         let mut tree_lines: Vec<String> = Vec::new();
         if !inspector_state.connected {
@@ -235,6 +260,69 @@ pub fn render(
             .wrap(Wrap { trim: false })
             .scroll((state.inspector_pane.scroll, 0));
         f.render_widget(p, area);
+    } else {
+        let mut lines = vec![
+            Line::from(format!(
+                "Sampling interval: {} ms",
+                state.resource_monitor.interval_ms
+            )),
+            Line::from(if state.resource_monitor.recording {
+                "Recording: active"
+            } else {
+                "Recording: waiting for app process"
+            }),
+            Line::from(String::new()),
+        ];
+        if let Some(sample) = &state.resource_monitor.sample {
+            lines.push(Line::from(format!(
+                "PID: {}",
+                sample
+                    .pid
+                    .map_or_else(|| "unavailable".to_string(), |pid| pid.to_string())
+            )));
+            lines.push(Line::from(format!(
+                "CPU: {}",
+                sample
+                    .cpu_percent
+                    .map_or_else(|| "unavailable".to_string(), |value| format!("{value:.1}%"))
+            )));
+            lines.push(Line::from(format!(
+                "GPU: {}",
+                sample
+                    .gpu_percent
+                    .map_or_else(|| "unavailable".to_string(), |value| format!("{value:.1}%"))
+            )));
+            lines.push(Line::from(format!(
+                "Memory: {}",
+                sample
+                    .memory_bytes
+                    .map_or_else(|| "unavailable".to_string(), format_bytes)
+            )));
+            lines.push(Line::from(format!(
+                "Threads: {}",
+                sample
+                    .thread_count
+                    .map_or_else(|| "unavailable".to_string(), |count| count.to_string())
+            )));
+            lines.push(Line::from(String::new()));
+            if !sample.unavailable.is_empty() {
+                lines.push(Line::from("Unavailable metrics:"));
+                lines.extend(
+                    sample
+                        .unavailable
+                        .iter()
+                        .map(|reason| Line::from(format!("  {reason}"))),
+                );
+            }
+        } else {
+            lines.push(Line::from("Waiting for the running app process."));
+        }
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(resource_block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     let (status_icon, status_text) = match state.status {
@@ -314,6 +402,7 @@ pub fn render(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("switch pane"),
+        Span::raw(" | [1–4] panes"),
         // Span::styled(
         //     "[e] ",
         //     Style::default()
@@ -348,6 +437,17 @@ pub fn render(
 
     f.render_widget(status_bar, bottom_chunks[0]);
     f.render_widget(controls_bar, bottom_chunks[1]);
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
 }
 
 /// Render the focused log pane for Vim-style selection mode.
@@ -478,6 +578,53 @@ fn build_selection_view(
     };
 
     (rendered, view, scroll as u16)
+}
+
+/// Build the row mapping used for clicks in the ordinary wrapped log view.
+/// Row counts use terminal cell widths, matching the Paragraph and scroll
+/// calculation; only the source row index matters outside selection mode.
+fn build_row_hit_test_view(
+    lines: &[Line],
+    inner_x: u16,
+    inner_y: u16,
+    width: u16,
+    height: u16,
+    start: usize,
+    skip_top: u16,
+) -> PaneView {
+    let inner_width = (width as usize).max(1);
+    let skip = skip_top as usize;
+    let visible_limit = skip.saturating_add(height as usize);
+    let mut wrapped_rows = Vec::with_capacity(visible_limit);
+    for (index, line) in lines.iter().enumerate().skip(start) {
+        let row_count = line.width().div_ceil(inner_width).max(1);
+        for _ in 0..row_count {
+            wrapped_rows.push(VisualRow {
+                line: index,
+                start: 0,
+                len: 1,
+            });
+            if wrapped_rows.len() >= visible_limit {
+                break;
+            }
+        }
+        if wrapped_rows.len() >= visible_limit {
+            break;
+        }
+    }
+    let visible_rows = wrapped_rows
+        .into_iter()
+        .skip(skip)
+        .take(height as usize)
+        .collect();
+
+    PaneView {
+        x: inner_x,
+        y: inner_y,
+        height,
+        visible_rows,
+        logical: Vec::new(),
+    }
 }
 
 #[cfg(test)]

@@ -72,6 +72,72 @@ impl<T> LogHistory<T> {
         self.trim();
     }
 
+    /// Update one entry and replace only the rows it contributed.
+    pub fn update_at(
+        &mut self,
+        index: usize,
+        update: impl FnOnce(&mut T),
+        render: impl for<'a> Fn(&'a T) -> Cow<'a, str>,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(index) else {
+            return false;
+        };
+        update(entry);
+
+        let old_row_count = self.row_counts[index];
+        let (start, end) = if index + 1 == self.row_counts.len() {
+            let end = self.rows.len();
+            (end - old_row_count, end)
+        } else {
+            let start: usize = self.row_counts[..index].iter().sum();
+            (start, start + old_row_count)
+        };
+        let rows = parse_rows(render(&self.entries[index]).as_ref());
+        let row_count = rows.len();
+        self.rows.splice(start..end, rows);
+        self.row_counts[index] = row_count;
+        true
+    }
+
+    /// Append rows to the last entry after updating it.
+    ///
+    /// This is used when a repeated group is expanded and another matching
+    /// line arrives: the new occurrence can be appended without re-rendering
+    /// every occurrence already shown.
+    pub fn append_to_last(
+        &mut self,
+        update: impl FnOnce(&mut T),
+        render_appended: impl for<'a> FnOnce(&'a T) -> Cow<'a, str>,
+    ) -> bool {
+        let Some(index) = self.entries.len().checked_sub(1) else {
+            return false;
+        };
+        let entry = &mut self.entries[index];
+        update(entry);
+        let rows = parse_rows(render_appended(entry).as_ref());
+        self.row_counts[index] += rows.len();
+        self.rows.extend(rows);
+        true
+    }
+
+    /// Update the last entry without changing its cached rows.
+    pub fn update_last(&mut self, update: impl FnOnce(&mut T)) -> bool {
+        let Some(entry) = self.entries.last_mut() else {
+            return false;
+        };
+        update(entry);
+        true
+    }
+
+    /// Find the entry that contributed a flattened rendered row.
+    pub fn entry_index_for_row(&self, row: usize) -> Option<usize> {
+        let mut end = 0;
+        self.row_counts.iter().position(|count| {
+            end += count;
+            row < end
+        })
+    }
+
     /// Re-render every entry, e.g. after a display toggle changed what the
     /// lines should say. O(n) — only worth calling on an explicit user action.
     pub fn rebuild(&mut self, render: impl for<'a> Fn(&'a T) -> Cow<'a, str>) {

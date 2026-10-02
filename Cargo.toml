@@ -1,6 +1,6 @@
 [package]
 name = "aimer_cli"
-version = "0.4.1+1"
+version = "0.5.2+1"
 edition = "2024"
 resolver = "3"
 
@@ -23,11 +23,21 @@ aimer_reload_protocol.workspace = true
 aimer_hot_reload.workspace = true
 
 # Non-local
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "sync",
+  "time",
+] }
+reqwest.workspace = true
+flate2.workspace = true
+zstd.workspace = true
 futures-util.workspace = true
 tokio-tungstenite.workspace = true
 dirs.workspace = true
 uuid.workspace = true
+sysinfo.workspace = true
 rmcp.workspace = true
 ansi-to-tui.workspace = true
 clap.workspace = true
@@ -68,8 +78,12 @@ chrono.workspace = true
 
 
 [workspace]
-members = [".", "aimer_hot_reload", "aimer_reload_protocol", "aimer_reload_server"]
-
+members = [
+  ".",
+  "aimer_hot_reload",
+  "aimer_reload_protocol",
+  "aimer_reload_server",
+]
 
 
 [workspace.dependencies]
@@ -83,13 +97,24 @@ aimer_hot_reload = { path = "aimer_hot_reload" }
 chrono = "0.4.45"
 crossbeam = "0.8.4"
 tokio = "1.52.3"
+reqwest = { version = "0.13.5", default-features = false, features = [
+  "rustls",
+  "stream",
+] }
+flate2 = "1.1"
+zstd = "0.13"
 futures-util = "0.3.31"
-tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.29.0", features = [
+  "rustls-tls-native-roots",
+] }
 serde = { version = "1.0.228", features = ["default", "derive"] }
 serde_json = "1.0.150"
 uuid = { version = "1.23.5", features = ["js", "v4", "serde"] }
 dirs = "6.0.0"
-walrus = "0.26.5"
+sysinfo = { version = "0.37.2", default-features = false, features = [
+  "system",
+] }
+walrus = "0.27.2"
 wasmparser = { version = "0.239.0", default-features = false }
 rmcp = { version = "3.2.0", features = ["transport-io"] }
 colored = "3.1.1"

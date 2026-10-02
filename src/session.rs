@@ -16,6 +16,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::config::ResourceMonitorConfig;
+use crate::resource_monitor::{
+    MAX_SAMPLE_INTERVAL_MS, MIN_SAMPLE_INTERVAL_MS, MonitorInputs, MonitorUpdate,
+    ResourceMonitorStatus,
+};
+
 const SESSION_DIRECTORY: &str = ".aimer/sessions";
 const LOG_CAPACITY: usize = 32_768;
 const CONTROL_RETRY_COUNT: usize = 3;
@@ -252,7 +258,7 @@ pub struct ClearLogsResult {
 }
 
 /// Current externally visible session state.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub session_id: Uuid,
     pub run_id: u64,
@@ -266,6 +272,9 @@ pub struct SessionSnapshot {
     pub app_process: Option<ProcessIdentity>,
     /// Web targets expose the dev-server URL independently of the runner PID.
     pub app_url: Option<String>,
+    /// Latest resource sample and active recording status.
+    #[serde(default)]
+    pub resource_monitor: ResourceMonitorStatus,
 }
 
 /// A persisted session descriptor used for discovery.
@@ -365,6 +374,7 @@ struct SessionState {
     last_error: Option<String>,
     app_process: Option<ProcessIdentity>,
     app_url: Option<String>,
+    resource_monitor: ResourceMonitorStatus,
     next_seq: u64,
     logs: VecDeque<LogEntry>,
     commands: VecDeque<SessionCommand>,
@@ -374,6 +384,8 @@ struct SessionState {
 struct SharedSession {
     session_id: Uuid,
     configuration: RunConfiguration,
+    resource_config: ResourceMonitorConfig,
+    control_enabled: bool,
     endpoint: Mutex<String>,
     token: String,
     descriptor_path: PathBuf,
@@ -404,6 +416,67 @@ impl SessionHandle {
         snapshot_locked(&self.shared, &state)
     }
 
+    pub(crate) fn monitor_inputs(&self) -> MonitorInputs {
+        let state = self.shared.state.lock().expect("session mutex poisoned");
+        MonitorInputs {
+            session_id: self.shared.session_id,
+            run_id: state.run_id,
+            project_root: self.shared.configuration.project_root.clone(),
+            target: self.shared.configuration.target.clone(),
+            device: self.shared.configuration.device.clone(),
+            status: state.status,
+            app_process: state.app_process.clone(),
+            interval_ms: state.resource_monitor.interval_ms,
+            retention_days: self.shared.resource_config.retention_days,
+        }
+    }
+
+    pub(crate) fn publish_resource_sample(&self, update: MonitorUpdate) {
+        let mut state = self.shared.state.lock().expect("session mutex poisoned");
+        if update.run_id != state.run_id
+            || self.run_id.is_some_and(|run_id| run_id != state.run_id)
+            || !matches!(state.status, SessionStatus::Running | SessionStatus::Error)
+            || state.app_process.as_ref().and_then(|process| process.pid) != update.sample.pid
+        {
+            return;
+        }
+        state.resource_monitor.sample = Some(update.sample);
+        state.resource_monitor.recording = update.recording;
+    }
+
+    pub(crate) fn clear_resource_sample(&self) {
+        let mut state = self.shared.state.lock().expect("session mutex poisoned");
+        state.resource_monitor.recording = false;
+        state.resource_monitor.sample = None;
+    }
+
+    pub(crate) fn wait_for_monitor_wake(&self, duration: Duration) {
+        let state = self.shared.state.lock().expect("session mutex poisoned");
+        let _ = self
+            .shared
+            .wake
+            .wait_timeout(state, duration)
+            .expect("session mutex poisoned while waiting for resource monitor");
+    }
+
+    fn set_resource_interval(
+        &self,
+        interval_ms: Option<u64>,
+    ) -> Result<ResourceMonitorStatus, String> {
+        let interval_ms = interval_ms.unwrap_or(self.shared.resource_config.sample_interval_ms);
+        if !(MIN_SAMPLE_INTERVAL_MS..=MAX_SAMPLE_INTERVAL_MS).contains(&interval_ms) {
+            return Err(format!(
+                "sample interval must be between {MIN_SAMPLE_INTERVAL_MS} and {MAX_SAMPLE_INTERVAL_MS} milliseconds"
+            ));
+        }
+        let mut state = self.shared.state.lock().expect("session mutex poisoned");
+        state.resource_monitor.interval_ms = interval_ms;
+        let status = state.resource_monitor.clone();
+        drop(state);
+        self.shared.wake.notify_all();
+        Ok(status)
+    }
+
     /// Creates a handle scoped to the current run. Lifecycle events from a
     /// previous runner then cannot clear the identity of a newly restarted
     /// app.
@@ -428,6 +501,15 @@ impl SessionHandle {
                 state.last_error = last_error;
             } else if status != SessionStatus::Error {
                 state.last_error = None;
+            }
+            let app_process_survives_error = status == SessionStatus::Error
+                && state
+                    .app_process
+                    .as_ref()
+                    .is_some_and(|process| process.role == ProcessRole::App);
+            if status != SessionStatus::Running && !app_process_survives_error {
+                state.resource_monitor.recording = false;
+                state.resource_monitor.sample = None;
             }
             if matches!(status, SessionStatus::Idling | SessionStatus::Stopped) {
                 state.app_process = None;
@@ -461,6 +543,10 @@ impl SessionHandle {
             if self.run_id.is_some_and(|run_id| run_id != state.run_id) {
                 return;
             }
+            if process.is_none() {
+                state.resource_monitor.recording = false;
+                state.resource_monitor.sample = None;
+            }
             state.app_process = process;
             state.app_url = app_url;
         }
@@ -471,6 +557,39 @@ impl SessionHandle {
     /// Clear the current process as soon as a restart or app exit begins.
     pub fn clear_process(&self) {
         self.set_process(None, None);
+    }
+
+    /// Advance to a fresh run for a restart initiated by the local console.
+    /// MCP initiated restarts use `accept_restart`, which also carries a reply
+    /// channel for the requesting client.
+    pub fn begin_next_run(&self) -> Result<u64, String> {
+        let _mutation = match self.shared.mutation.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return Err("busy".to_string()),
+            Err(TryLockError::Poisoned(_)) => {
+                return Err("session mutation lock poisoned".to_string());
+            }
+        };
+        let run_id = {
+            let mut state = self.shared.state.lock().expect("session mutex poisoned");
+            if self.run_id.is_some_and(|run_id| run_id != state.run_id) {
+                return Err("stale session handle".to_string());
+            }
+            if state.pending_mutation.is_some() {
+                return Err("busy".to_string());
+            }
+            state.run_id = state.run_id.saturating_add(1);
+            state.status = SessionStatus::Restarting;
+            state.last_error = None;
+            state.app_process = None;
+            state.app_url = None;
+            state.resource_monitor.recording = false;
+            state.resource_monitor.sample = None;
+            state.run_id
+        };
+        self.persist_descriptor();
+        self.shared.wake.notify_all();
+        Ok(run_id)
     }
 
     /// Append a bounded log record to the current run.
@@ -529,6 +648,8 @@ impl SessionHandle {
             state.last_error = None;
             state.app_process = None;
             state.app_url = None;
+            state.resource_monitor.recording = false;
+            state.resource_monitor.sample = None;
             state.pending_mutation = Some(PendingMutation::Restart(reply));
         }
         self.persist_descriptor();
@@ -542,6 +663,8 @@ impl SessionHandle {
             let mut state = self.shared.state.lock().expect("session mutex poisoned");
             state.status = SessionStatus::Error;
             state.last_error = Some(error.into());
+            state.resource_monitor.recording = false;
+            state.resource_monitor.sample = None;
             match state.pending_mutation.take() {
                 Some(PendingMutation::Restart(reply)) => Some(reply),
                 None => None,
@@ -580,9 +703,7 @@ impl SessionHandle {
             } else {
                 state.logs.retain(|entry| {
                     !(stream.matches(entry.stream)
-                        && request
-                            .run_id
-                            .map_or(true, |run_id| entry.run_id == run_id))
+                        && request.run_id.map_or(true, |run_id| entry.run_id == run_id))
                 });
             }
             boundary
@@ -618,13 +739,27 @@ impl SessionHandle {
 
     fn request_status(&self, operation: &str, payload: Value) -> Result<Value, String> {
         match operation {
-            "ping" | "status" => {
-                serde_json::to_value(self.snapshot()).map_err(|e| e.to_string())
-            }
+            "ping" | "status" => serde_json::to_value(self.snapshot()).map_err(|e| e.to_string()),
             "logs" => {
                 let request: GetLogsRequest =
                     serde_json::from_value(payload).map_err(|e| e.to_string())?;
                 serde_json::to_value(self.get_logs(request)).map_err(|e| e.to_string())
+            }
+            "resource_usage" => serde_json::to_value(self.snapshot().resource_monitor)
+                .map_err(|error| error.to_string()),
+            "set_resource_interval" => {
+                #[derive(Deserialize)]
+                struct IntervalRequest {
+                    #[serde(default)]
+                    interval_ms: Option<u64>,
+                }
+                let request: IntervalRequest = if payload.is_null() {
+                    IntervalRequest { interval_ms: None }
+                } else {
+                    serde_json::from_value(payload).map_err(|error| error.to_string())?
+                };
+                serde_json::to_value(self.set_resource_interval(request.interval_ms)?)
+                    .map_err(|error| error.to_string())
             }
             "restart" => {
                 let snapshot = self.request_mutation(|reply| SessionCommand::Restart { reply })?;
@@ -655,6 +790,9 @@ impl SessionHandle {
     }
 
     fn persist_descriptor_checked(&self) -> anyhow::Result<()> {
+        if !self.shared.control_enabled {
+            return Ok(());
+        }
         let _write_guard = self
             .shared
             .descriptor_write
@@ -689,6 +827,7 @@ pub struct SessionRuntime {
     handle: SessionHandle,
     shutdown: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    monitor_join: Option<JoinHandle<()>>,
 }
 
 /// Stable name for the run-scoped control lifetime exposed to embedders.
@@ -702,22 +841,43 @@ impl SessionRuntime {
 
     /// Start a session in an explicit registry directory. This is useful for
     /// embedding and tests; the CLI uses the per-user default location.
-    pub fn start_in(
-        directory: PathBuf,
+    pub fn start_in(directory: PathBuf, configuration: RunConfiguration) -> anyhow::Result<Self> {
+        Self::start_inner(Some(directory), configuration)
+    }
+
+    /// Start resource sampling without registering a discoverable MCP control
+    /// endpoint. The TUI uses this when MCP control is disabled.
+    pub fn start_monitor_only(configuration: RunConfiguration) -> anyhow::Result<Self> {
+        Self::start_inner(None, configuration)
+    }
+
+    fn start_inner(
+        directory: Option<PathBuf>,
         configuration: RunConfiguration,
     ) -> anyhow::Result<Self> {
         let session_id = Uuid::new_v4();
         let token = Uuid::new_v4().to_string();
-        fs::create_dir_all(&directory)
-            .with_context(|| format!("creating {}", directory.display()))?;
-        let descriptor_path = directory.join(format!("{session_id}.json"));
-        let (listener, endpoint) = bind_control_listener()?;
+        let resource_config = crate::config::resource_monitor_config();
+        let control_enabled = directory.is_some();
+        let (descriptor_path, listener, endpoint) = if let Some(directory) = directory {
+            fs::create_dir_all(&directory)
+                .with_context(|| format!("creating {}", directory.display()))?;
+            let descriptor_path = directory.join(format!("{session_id}.json"));
+            let (listener, endpoint) = bind_control_listener()?;
+            (descriptor_path, Some(listener), endpoint)
+        } else {
+            (PathBuf::new(), None, String::new())
+        };
         let state = SessionState {
             run_id: 1,
             status: SessionStatus::Starting,
             last_error: None,
             app_process: None,
             app_url: None,
+            resource_monitor: ResourceMonitorStatus {
+                interval_ms: resource_config.sample_interval_ms,
+                ..ResourceMonitorStatus::default()
+            },
             next_seq: 1,
             logs: VecDeque::with_capacity(LOG_CAPACITY.min(1024)),
             commands: VecDeque::new(),
@@ -726,6 +886,8 @@ impl SessionRuntime {
         let shared = Arc::new(SharedSession {
             session_id,
             configuration,
+            resource_config,
+            control_enabled,
             endpoint: Mutex::new(endpoint),
             token,
             descriptor_path,
@@ -738,28 +900,63 @@ impl SessionRuntime {
             shared: Arc::clone(&shared),
             run_id: None,
         };
-        handle
-            .persist_descriptor_checked()
-            .context("registering aimer run session")?;
+        if control_enabled {
+            handle
+                .persist_descriptor_checked()
+                .context("registering aimer run session")?;
+        }
 
         let shutdown = Arc::new(AtomicBool::new(false));
-        let thread_shutdown = Arc::clone(&shutdown);
-        let thread_shared = Arc::clone(&shared);
-        let join = match thread::Builder::new()
-            .name("aimer-mcp-control".to_string())
-            .spawn(move || serve(listener, thread_shared, thread_shutdown))
+        let join = if let Some(listener) = listener {
+            let thread_shutdown = Arc::clone(&shutdown);
+            let thread_shared = Arc::clone(&shared);
+            match thread::Builder::new()
+                .name("aimer-mcp-control".to_string())
+                .spawn(move || serve(listener, thread_shared, thread_shutdown))
+            {
+                Ok(join) => Some(join),
+                Err(error) => {
+                    let _ = fs::remove_file(&shared.descriptor_path);
+                    return Err(error).context("starting aimer MCP control endpoint");
+                }
+            }
+        } else {
+            None
+        };
+
+        let monitor_shutdown = Arc::clone(&shutdown);
+        let monitor_handle = handle.clone();
+        let monitor_join = match thread::Builder::new()
+            .name("aimer-resource-monitor".to_string())
+            .spawn(move || crate::resource_monitor::run_monitor(monitor_handle, monitor_shutdown))
         {
             Ok(join) => join,
             Err(error) => {
-                let _ = fs::remove_file(&shared.descriptor_path);
-                return Err(error).context("starting aimer MCP control endpoint");
+                shutdown.store(true, Ordering::Release);
+                if control_enabled {
+                    let endpoint = handle
+                        .shared
+                        .endpoint
+                        .lock()
+                        .expect("endpoint mutex poisoned")
+                        .clone();
+                    let _ = TcpStream::connect(endpoint);
+                }
+                if let Some(join) = join {
+                    let _ = join.join();
+                }
+                if control_enabled {
+                    let _ = fs::remove_file(&handle.shared.descriptor_path);
+                }
+                return Err(error).context("starting aimer resource monitor");
             }
         };
 
         Ok(Self {
             handle,
             shutdown,
-            join: Some(join),
+            join,
+            monitor_join: Some(monitor_join),
         })
     }
 
@@ -773,18 +970,24 @@ impl SessionRuntime {
 impl Drop for SessionRuntime {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
-        let endpoint = self
-            .handle
-            .shared
-            .endpoint
-            .lock()
-            .expect("endpoint mutex poisoned")
-            .clone();
-        let _ = TcpStream::connect(endpoint);
-        if let Some(join) = self.join.take() {
+        self.handle.shared.wake.notify_all();
+        if let Some(join) = self.monitor_join.take() {
             let _ = join.join();
         }
-        let _ = fs::remove_file(&self.handle.shared.descriptor_path);
+        if let Some(join) = self.join.take() {
+            let endpoint = self
+                .handle
+                .shared
+                .endpoint
+                .lock()
+                .expect("endpoint mutex poisoned")
+                .clone();
+            let _ = TcpStream::connect(endpoint);
+            let _ = join.join();
+        }
+        if self.handle.shared.control_enabled {
+            let _ = fs::remove_file(&self.handle.shared.descriptor_path);
+        }
     }
 }
 
@@ -814,8 +1017,7 @@ impl SessionRegistry {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(sessions),
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("reading {}", self.directory.display()));
+                return Err(error).with_context(|| format!("reading {}", self.directory.display()));
             }
         };
         let expected_project = project.map(normalize_project_path);
@@ -1074,6 +1276,7 @@ fn snapshot_locked(shared: &SharedSession, state: &SessionState) -> SessionSnaps
         last_error: state.last_error.clone(),
         app_process: state.app_process.clone(),
         app_url: state.app_url.clone(),
+        resource_monitor: state.resource_monitor.clone(),
     }
 }
 
@@ -1082,12 +1285,8 @@ fn logs_locked(state: &SessionState, request: GetLogsRequest) -> LogsPage {
     let stream = request.stream.unwrap_or(LogStream::All);
     let mut entries = Vec::with_capacity(limit);
     for entry in state.logs.iter().filter(|entry| {
-        request
-            .cursor
-            .map_or(true, |cursor| entry.seq > cursor)
-            && request
-                .run_id
-                .map_or(true, |run_id| entry.run_id == run_id)
+        request.cursor.map_or(true, |cursor| entry.seq > cursor)
+            && request.run_id.map_or(true, |run_id| entry.run_id == run_id)
             && stream.matches(entry.stream)
     }) {
         let mut entry = entry.clone();
@@ -1176,11 +1375,48 @@ mod tests {
         }
     }
 
+    fn in_memory_handle(project_root: &Path) -> SessionHandle {
+        let resource_config = ResourceMonitorConfig::default();
+        let shared = Arc::new(SharedSession {
+            session_id: Uuid::new_v4(),
+            configuration: configuration(project_root),
+            resource_config,
+            control_enabled: false,
+            endpoint: Mutex::new(String::new()),
+            token: Uuid::new_v4().to_string(),
+            descriptor_path: PathBuf::new(),
+            descriptor_write: Mutex::new(()),
+            state: Mutex::new(SessionState {
+                run_id: 1,
+                status: SessionStatus::Starting,
+                last_error: None,
+                app_process: None,
+                app_url: None,
+                resource_monitor: ResourceMonitorStatus {
+                    interval_ms: resource_config.sample_interval_ms,
+                    ..ResourceMonitorStatus::default()
+                },
+                next_seq: 1,
+                logs: VecDeque::new(),
+                commands: VecDeque::new(),
+                pending_mutation: None,
+            }),
+            wake: Condvar::new(),
+            mutation: Mutex::new(()),
+        });
+        SessionHandle {
+            shared,
+            run_id: None,
+        }
+    }
+
     #[test]
     fn host_app_identity_is_visual_and_serializes_stable_names() {
         let identity = ProcessIdentity::host_app(
             19_999,
-            Some(PathBuf::from("/Applications/Jaime.app/Contents/MacOS/Jaime")),
+            Some(PathBuf::from(
+                "/Applications/Jaime.app/Contents/MacOS/Jaime",
+            )),
             None,
         );
         assert!(identity.is_host_visual_process());
@@ -1193,8 +1429,10 @@ mod tests {
 
     #[test]
     fn device_and_web_identities_are_not_host_visual_processes() {
-        assert!(!ProcessIdentity::device_app(Some(123), Some("com.example.app".into()))
-            .is_host_visual_process());
+        assert!(
+            !ProcessIdentity::device_app(Some(123), Some("com.example.app".into()))
+                .is_host_visual_process()
+        );
         assert!(!ProcessIdentity::web_runner(Some(123), None).is_host_visual_process());
         assert_eq!(
             ProcessIdentity::device_app(Some(123), None).visual_target,
@@ -1254,14 +1492,34 @@ mod tests {
     }
 
     #[test]
+    fn monitor_only_runtime_keeps_tui_state_without_registering_mcp_control() {
+        let temp = tempfile::tempdir().unwrap();
+        let configuration = configuration(temp.path());
+        let runtime = SessionRuntime::start_monitor_only(configuration).unwrap();
+        let handle = runtime.handle();
+
+        assert_eq!(handle.snapshot().status, SessionStatus::Starting);
+        assert!(
+            SessionRegistry::new(temp.path().join("sessions"))
+                .live(None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn registry_discovers_multiple_live_sessions_without_guessing() {
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
         fs::create_dir_all(&project).unwrap();
         let registry_dir = temp.path().join("sessions");
-        let _first = SessionRuntime::start_in(registry_dir.clone(), configuration(&project)).unwrap();
-        let _second = SessionRuntime::start_in(registry_dir.clone(), configuration(&project)).unwrap();
-        let live = SessionRegistry::new(registry_dir).live(Some(&project)).unwrap();
+        let _first =
+            SessionRuntime::start_in(registry_dir.clone(), configuration(&project)).unwrap();
+        let _second =
+            SessionRuntime::start_in(registry_dir.clone(), configuration(&project)).unwrap();
+        let live = SessionRegistry::new(registry_dir)
+            .live(Some(&project))
+            .unwrap();
         assert_eq!(live.len(), 2);
     }
 
@@ -1269,11 +1527,8 @@ mod tests {
     fn attach_validates_the_token_and_returns_the_current_app_identity() {
         let temp = tempfile::tempdir().unwrap();
         let registry_dir = temp.path().join("sessions");
-        let runtime = SessionRuntime::start_in(
-            registry_dir.clone(),
-            configuration(temp.path()),
-        )
-        .unwrap();
+        let runtime =
+            SessionRuntime::start_in(registry_dir.clone(), configuration(temp.path())).unwrap();
         let handle = runtime.handle();
         handle.set_process(
             Some(ProcessIdentity::host_app(
@@ -1289,7 +1544,13 @@ mod tests {
             .attach(handle.session_id())
             .unwrap();
         let snapshot = client.ping().unwrap();
-        assert_eq!(snapshot.app_process.as_ref().and_then(|process| process.pid), Some(19_999));
+        assert_eq!(
+            snapshot
+                .app_process
+                .as_ref()
+                .and_then(|process| process.pid),
+            Some(19_999)
+        );
 
         let mut bad_descriptor = client.descriptor().clone();
         bad_descriptor.token = "wrong-token".to_string();
@@ -1298,11 +1559,78 @@ mod tests {
     }
 
     #[test]
+    fn resource_monitor_interval_can_be_changed_and_restored_over_the_control_protocol() {
+        let temp = tempfile::tempdir().unwrap();
+        let handle = in_memory_handle(temp.path());
+        let configured_interval = handle.snapshot().resource_monitor.interval_ms;
+
+        let changed = handle
+            .request_status(
+                "set_resource_interval",
+                serde_json::json!({ "interval_ms": 500 }),
+            )
+            .unwrap();
+        assert_eq!(changed["interval_ms"], 500);
+        let live = handle
+            .request_status("resource_usage", serde_json::Value::Null)
+            .unwrap();
+        assert_eq!(live["interval_ms"], 500);
+
+        let restored = handle
+            .request_status("set_resource_interval", serde_json::json!({}))
+            .unwrap();
+        assert_eq!(restored["interval_ms"], configured_interval);
+        assert!(
+            handle
+                .request_status(
+                    "set_resource_interval",
+                    serde_json::json!({ "interval_ms": 499 })
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn console_restart_advances_run_and_rejects_stale_runner_updates() {
+        let temp = tempfile::tempdir().unwrap();
+        let handle = in_memory_handle(temp.path());
+        handle.set_process(Some(ProcessIdentity::host_app(123, None, None)), None);
+        handle.set_status(SessionStatus::Running, None);
+        handle.publish_resource_sample(MonitorUpdate {
+            run_id: 1,
+            sample: crate::resource_monitor::ResourceSample {
+                timestamp_unix_ms: 1,
+                pid: Some(123),
+                cpu_percent: Some(5.0),
+                gpu_percent: None,
+                memory_bytes: Some(1024),
+                thread_count: Some(2),
+                unavailable: Vec::new(),
+            },
+            recording: true,
+        });
+        let previous_runner = handle.scoped();
+
+        assert_eq!(handle.begin_next_run().unwrap(), 2);
+        let snapshot = handle.snapshot();
+        assert_eq!(snapshot.status, SessionStatus::Restarting);
+        assert_eq!(snapshot.app_process, None);
+        assert!(snapshot.resource_monitor.sample.is_none());
+        assert!(!snapshot.resource_monitor.recording);
+
+        previous_runner.set_process(Some(ProcessIdentity::host_app(456, None, None)), None);
+        previous_runner.set_status(SessionStatus::Running, None);
+        let snapshot = handle.snapshot();
+        assert_eq!(snapshot.status, SessionStatus::Restarting);
+        assert_eq!(snapshot.app_process, None);
+    }
+
+    #[test]
     fn concurrent_readers_work_while_a_second_mutation_is_busy() {
         let temp = tempfile::tempdir().unwrap();
         let registry_dir = temp.path().join("sessions");
-        let runtime = SessionRuntime::start_in(registry_dir.clone(), configuration(temp.path()))
-            .unwrap();
+        let runtime =
+            SessionRuntime::start_in(registry_dir.clone(), configuration(temp.path())).unwrap();
         let handle = runtime.handle();
         let client = SessionRegistry::new(registry_dir)
             .attach(handle.session_id())

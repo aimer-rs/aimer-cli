@@ -330,10 +330,7 @@ pub fn execute(
 
     let pkg_name = crate::config::resolve_package_name(std::path::Path::new("."));
 
-    let session_runtime = if selection != PipelineSelection::HotReload
-        && !no_mcp
-        && crate::config::mcp_auto_start()
-    {
+    let session_runtime = if selection != PipelineSelection::HotReload {
         let configuration = crate::session::RunConfiguration {
             project_root: project_root.clone(),
             target: selected_device.target.to_string(),
@@ -346,10 +343,21 @@ pub fn execute(
             ),
             parent_pid: std::process::id(),
         };
-        match crate::session::SessionRuntime::start(configuration) {
+        let mcp_enabled = !no_mcp && crate::config::mcp_auto_start();
+        let start = if mcp_enabled {
+            crate::session::SessionRuntime::start(configuration)
+        } else {
+            crate::session::SessionRuntime::start_monitor_only(configuration)
+        };
+        match start {
             Ok(runtime) => Some(runtime),
             Err(error) => {
-                eprintln!("warning: MCP control is unavailable: {error}");
+                let feature = if mcp_enabled {
+                    "MCP control and resource monitoring"
+                } else {
+                    "resource monitoring"
+                };
+                eprintln!("warning: {feature} is unavailable: {error}");
                 None
             }
         }

@@ -13,6 +13,7 @@ pub mod commands;
 pub mod console;
 pub mod errors;
 pub mod session;
+pub mod resource_monitor;
 pub mod targets;
 pub mod tui;
 mod consts;
@@ -150,6 +151,27 @@ enum Commands {
         project_name: String,
     },
 
+    /// Read or search crate documentation from docs.rs
+    Docs {
+        /// Cargo package name, for example `serde`
+        crate_name: String,
+        /// Item path relative to the crate root, for example `de::Deserialize`
+        #[arg(conflicts_with = "search")]
+        item_path: Option<String>,
+        /// Search public item names, paths, and documentation text
+        #[arg(long, conflicts_with = "item_path")]
+        search: Option<String>,
+        /// Exact crate version (defaults to the version in the current project's Cargo.lock)
+        #[arg(long)]
+        version: Option<String>,
+        /// Maximum search results to return (1–100; defaults to 20)
+        #[arg(long, requires = "search")]
+        limit: Option<usize>,
+        /// Refresh the cached docs.rs crate index
+        #[arg(long)]
+        refresh: bool,
+    },
+
     /// Run the project (interactive picker, or scriptable with
     /// --target/--device)
     Run {
@@ -277,6 +299,23 @@ fn main() -> anyhow::Result<()> {
     match &cli.command {
         Some(Commands::Create { project_name }) => {
             commands::create::execute(project_name)?;
+        }
+        Some(Commands::Docs {
+            crate_name,
+            item_path,
+            search,
+            version,
+            limit,
+            refresh,
+        }) => {
+            commands::docs::execute(
+                crate_name.clone(),
+                item_path.clone(),
+                search.clone(),
+                version.clone(),
+                *limit,
+                *refresh,
+            )?;
         }
         Some(Commands::Run {
             target,

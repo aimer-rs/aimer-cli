@@ -4,6 +4,7 @@ use crate::commands::run::cargo_message::ErrorReport;
 use crate::commands::run::panic_report::PanicReport;
 use crate::commands::run::utilities::{AppOutput, StyledLog};
 use crate::console::log_history::LogHistory;
+use crate::resource_monitor::ResourceMonitorStatus;
 
 /// Maximum number of log lines retained per pane before old lines are dropped.
 pub const MAX_LINES: usize = 32768;
@@ -54,15 +55,17 @@ pub enum ConsoleType {
     App,
     Build,
     Inspector,
+    ResourceMonitor,
 }
 
 impl ConsoleType {
-    /// Cycle to the next pane (App → Build → Inspector → App).
+    /// Cycle to the next pane (App → Build → Inspector → Resources → App).
     pub fn next(&self) -> ConsoleType {
         match self {
             ConsoleType::App => ConsoleType::Build,
             ConsoleType::Build => ConsoleType::Inspector,
-            ConsoleType::Inspector => ConsoleType::App,
+            ConsoleType::Inspector => ConsoleType::ResourceMonitor,
+            ConsoleType::ResourceMonitor => ConsoleType::App,
         }
     }
 }
@@ -151,6 +154,12 @@ impl BuildEntry {
 pub enum AppEntry {
     /// A line of application output, already styled by the reader thread.
     Line(StyledLog),
+    /// Consecutive identical application lines, kept as one expandable entry.
+    RepeatedLine {
+        line: StyledLog,
+        count: usize,
+        expanded: bool,
+    },
     /// A recovered widget panic, laid out on demand.
     Panic(PanicReport),
 }
@@ -164,6 +173,30 @@ impl AppEntry {
     pub fn render(&self, width: usize, show_source: bool) -> Cow<'_, str> {
         match self {
             Self::Line(line) => Cow::Owned(line.render(show_source)),
+            Self::RepeatedLine {
+                line,
+                count,
+                expanded,
+            } => {
+                let rendered = line.render(show_source);
+                if *expanded {
+                    let occurrences = (*count).min(MAX_LINES);
+                    let capacity = rendered
+                        .len()
+                        .saturating_mul(occurrences)
+                        .saturating_add(occurrences.saturating_sub(1));
+                    let mut output = String::with_capacity(capacity);
+                    for index in 0..occurrences {
+                        if index > 0 {
+                            output.push('\n');
+                        }
+                        output.push_str(&rendered);
+                    }
+                    Cow::Owned(output)
+                } else {
+                    Cow::Owned(format!("{rendered} [{count}]"))
+                }
+            }
             Self::Panic(report) => Cow::Owned(report.lines_with_width(width).join("\n")),
         }
     }
@@ -212,7 +245,8 @@ pub struct PaneView {
     pub height: u16,
     /// The visual rows currently displayed, top to bottom.
     pub visible_rows: Vec<VisualRow>,
-    /// Plain text of every logical line in the pane (selection-index space).
+    /// Plain text of every logical line in selection mode. Empty in the normal
+    /// view, which only needs the visible row mapping for mouse clicks.
     pub logical: Vec<String>,
 }
 
@@ -234,8 +268,13 @@ pub struct AppState {
     /// the pane narrow, and toggled with `e`; lines without a location — plain
     /// `println!` output — are unaffected.
     pub show_log_source: bool,
+    /// Whether consecutive identical app logs should collapse into expandable
+    /// groups. Enabled by the full-screen TUI and left off in inline mode.
+    collapse_repeated_app_logs: bool,
     pub status: Status,
     pub pane: ConsoleType,
+    /// Latest resource monitor sample from the live run session.
+    pub resource_monitor: ResourceMonitorStatus,
     pub build_pane: ScrollablePane,
     pub app_pane: ScrollablePane,
     pub inspector_pane: ScrollablePane,
@@ -257,14 +296,26 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        Self::with_repeated_app_log_collapse(false)
+    }
+
+    /// Create state for the full-screen TUI, where identical consecutive app
+    /// logs are collapsed and can be expanded with a mouse click.
+    pub(crate) fn new_for_tui() -> Self {
+        Self::with_repeated_app_log_collapse(true)
+    }
+
+    fn with_repeated_app_log_collapse(collapse_repeated_app_logs: bool) -> Self {
         Self {
             build_logs: LogHistory::new(MAX_LINES),
             app_logs: LogHistory::new(MAX_LINES),
             build_width: 0,
             app_width: 0,
             show_log_source: false,
+            collapse_repeated_app_logs,
             status: Status::Compiling(0),
             pane: ConsoleType::App,
+            resource_monitor: ResourceMonitorStatus::default(),
             build_pane: ScrollablePane::new(),
             app_pane: ScrollablePane::new(),
             inspector_pane: ScrollablePane::new(),
@@ -328,7 +379,68 @@ impl AppState {
     ///
     /// [`show_log_source`]: AppState::show_log_source
     pub fn push_app_log(&mut self, msg: StyledLog) {
-        self.push_app_entry(AppEntry::Line(msg.without_carriage_returns()));
+        let line = msg.without_carriage_returns();
+        if !self.collapse_repeated_app_logs {
+            self.push_app_entry(AppEntry::Line(line));
+            return;
+        }
+
+        let Some(index) = self.app_logs.entries().len().checked_sub(1) else {
+            self.push_app_entry(AppEntry::Line(line));
+            return;
+        };
+        let matches_last = match self.app_logs.entries().last() {
+            Some(AppEntry::Line(previous))
+            | Some(AppEntry::RepeatedLine { line: previous, .. }) => previous == &line,
+            Some(AppEntry::Panic(_)) | None => false,
+        };
+        if !matches_last {
+            self.push_app_entry(AppEntry::Line(line));
+            return;
+        }
+
+        let width = self.app_width;
+        let show_source = self.show_log_source;
+        let expanded_below_limit = match self.app_logs.entries().last() {
+            Some(AppEntry::RepeatedLine {
+                count,
+                expanded: true,
+                ..
+            }) => Some(*count < MAX_LINES),
+            _ => None,
+        };
+        if let Some(append_visible_line) = expanded_below_limit {
+            let increment = |entry: &mut AppEntry| {
+                if let AppEntry::RepeatedLine { count, .. } = entry {
+                    *count = count.saturating_add(1);
+                }
+            };
+            if append_visible_line {
+                let appended = line.render(show_source);
+                self.app_logs
+                    .append_to_last(increment, |_| Cow::Owned(appended));
+            } else {
+                self.app_logs.update_last(increment);
+            }
+        } else {
+            self.app_logs.update_at(
+                index,
+                |entry| match entry {
+                    AppEntry::Line(previous) => {
+                        *entry = AppEntry::RepeatedLine {
+                            line: previous.clone(),
+                            count: 2,
+                            expanded: false,
+                        };
+                    }
+                    AppEntry::RepeatedLine { count, .. } => {
+                        *count = count.saturating_add(1);
+                    }
+                    AppEntry::Panic(_) => {}
+                },
+                move |entry| entry.render(width, show_source),
+            );
+        }
     }
 
     /// Append the block of a widget panic the app recovered from, laid out for
@@ -343,6 +455,32 @@ impl AppState {
         let show_source = self.show_log_source;
         self.app_logs
             .push(entry, move |entry| entry.render(width, show_source));
+    }
+
+    /// Expand or collapse the repeated app log group containing a rendered row.
+    /// Returns `true` only when the row belongs to a repeated group.
+    pub fn toggle_repeated_app_log_at_row(&mut self, row: usize) -> bool {
+        let Some(index) = self.app_logs.entry_index_for_row(row) else {
+            return false;
+        };
+        if !matches!(
+            self.app_logs.entries().get(index),
+            Some(AppEntry::RepeatedLine { .. })
+        ) {
+            return false;
+        }
+
+        let width = self.app_width;
+        let show_source = self.show_log_source;
+        self.app_logs.update_at(
+            index,
+            |entry| {
+                if let AppEntry::RepeatedLine { expanded, .. } = entry {
+                    *expanded = !*expanded;
+                }
+            },
+            move |entry| entry.render(width, show_source),
+        )
     }
 
     /// Tell the App Logs pane how wide it is, re-laying its width-dependent
@@ -387,7 +525,11 @@ impl AppState {
         self.app_logs
             .entries()
             .iter()
-            .map(|entry| entry.render(self.app_width, self.show_log_source).into_owned())
+            .map(|entry| {
+                entry
+                    .render(self.app_width, self.show_log_source)
+                    .into_owned()
+            })
             .collect()
     }
 
@@ -551,13 +693,14 @@ mod tests {
     fn console_type_next_cycles() {
         assert_eq!(ConsoleType::App.next(), ConsoleType::Build);
         assert_eq!(ConsoleType::Build.next(), ConsoleType::Inspector);
-        assert_eq!(ConsoleType::Inspector.next(), ConsoleType::App);
+        assert_eq!(ConsoleType::Inspector.next(), ConsoleType::ResourceMonitor);
+        assert_eq!(ConsoleType::ResourceMonitor.next(), ConsoleType::App);
     }
 
     #[test]
     fn console_type_next_full_cycle() {
         let mut pane = ConsoleType::App;
-        for _ in 0..3 {
+        for _ in 0..4 {
             pane = pane.next();
         }
         assert_eq!(pane, ConsoleType::App);
@@ -691,6 +834,8 @@ mod tests {
         assert_eq!(state.pane, ConsoleType::Build);
         state.next_pane();
         assert_eq!(state.pane, ConsoleType::Inspector);
+        state.next_pane();
+        assert_eq!(state.pane, ConsoleType::ResourceMonitor);
         state.next_pane();
         assert_eq!(state.pane, ConsoleType::App);
     }
