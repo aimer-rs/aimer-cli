@@ -925,7 +925,7 @@ impl AimerMcpServer {
     #[tool(
         output_schema = mcp_result_schema(),
         name = "aimer_rust_cargo_check",
-        description = "Run cargo check for the selected workspace or package. Returns Cargo's actual exit code and bounded output. Cargo runs offline unless the existing rust-analyzer network setting opts in."
+        description = "Run cargo check for the selected workspace or package. Returns Cargo's actual exit code, bounded output, and the number of rustc warnings filtered from the output. Cargo runs offline unless the existing rust-analyzer network setting opts in."
     )]
     async fn rust_cargo_check(
         &self,
@@ -947,7 +947,7 @@ impl AimerMcpServer {
     #[tool(
         output_schema = mcp_result_schema(),
         name = "aimer_rust_cargo_test",
-        description = "Run cargo test for the selected workspace or package, optionally with a test name filter. Returns Cargo's actual exit code and bounded output. Cargo runs offline unless the existing rust-analyzer network setting opts in."
+        description = "Run cargo test for the selected workspace or package, optionally with a test name filter. Returns Cargo's actual exit code, bounded output, and the number of rustc warnings filtered from the output. Cargo runs offline unless the existing rust-analyzer network setting opts in."
     )]
     async fn rust_cargo_test(
         &self,

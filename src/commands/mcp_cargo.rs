@@ -14,6 +14,7 @@ use tokio::time::{interval, timeout};
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value as TomlValue};
 
 use super::mcp_ra::McpProgressReporter;
+use super::run::cargo_message::{CargoMessage, DiagnosticLevel};
 
 const CARGO_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
@@ -212,6 +213,7 @@ pub async fn run_cargo(
     let mut command = Command::new("cargo");
     command
         .arg(command_name)
+        .arg("--message-format=json")
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -268,23 +270,29 @@ pub async fn run_cargo(
             }
         }
     };
-    let (status, exit_code, stdout, stderr) = match output_result {
-        Ok(Ok(output)) => (
-            if output.status.success() {
-                "passed"
-            } else {
-                "failed"
-            },
-            output.status.code(),
-            bounded_text(&output.stdout),
-            bounded_text(&output.stderr),
-        ),
+    let (status, exit_code, stdout, stderr, warnings_filtered) = match output_result {
+        Ok(Ok(output)) => {
+            let (stdout, stderr, warnings_filtered) =
+                normalize_cargo_output(&output.stdout, &output.stderr);
+            (
+                if output.status.success() {
+                    "passed"
+                } else {
+                    "failed"
+                },
+                output.status.code(),
+                bounded_text(&stdout),
+                bounded_text(&stderr),
+                warnings_filtered,
+            )
+        }
         Ok(Err(error)) => return Err(error).context(format!("starting {command_label}")),
         Err(_) => (
             "timed_out",
             None,
             (String::new(), false),
             (String::new(), false),
+            0,
         ),
     };
     let lockfile_changed = if let Some(path) = lockfile {
@@ -302,9 +310,81 @@ pub async fn run_cargo(
         "stdout_truncated": stdout.1,
         "stderr": stderr.0,
         "stderr_truncated": stderr.1,
+        "warnings_filtered": warnings_filtered,
         "lockfile_changed": lockfile_changed,
         "timeout_seconds": CARGO_TIMEOUT.as_secs()
     }))
+}
+
+/// Remove rustc warning diagnostics from Cargo's JSON output while retaining
+/// readable diagnostics and test-process output for the MCP result.
+fn normalize_cargo_output(stdout: &[u8], stderr: &[u8]) -> (Vec<u8>, Vec<u8>, usize) {
+    let stdout = String::from_utf8_lossy(stdout);
+    let mut visible_stdout = String::new();
+    let mut visible_stderr = String::from_utf8_lossy(stderr).into_owned();
+    let mut warnings_filtered = 0;
+
+    for raw_line in stdout.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches(['\r', '\n']);
+        let Ok(message) = serde_json::from_str::<Value>(line) else {
+            visible_stdout.push_str(raw_line);
+            continue;
+        };
+        let Some(reason) = message.get("reason").and_then(Value::as_str) else {
+            visible_stdout.push_str(raw_line);
+            continue;
+        };
+
+        match reason {
+            "compiler-message" => match CargoMessage::parse(line) {
+                Some(CargoMessage::Diagnostic(diagnostic))
+                    if diagnostic.level == DiagnosticLevel::Warning =>
+                {
+                    warnings_filtered += 1;
+                }
+                Some(CargoMessage::Diagnostic(diagnostic)) => {
+                    append_diagnostic(&mut visible_stderr, &diagnostic.render());
+                }
+                _ => visible_stdout.push_str(raw_line),
+            },
+            // These are Cargo's machine protocol, not useful command output.
+            "compiler-artifact" | "build-finished" => {}
+            // Keep build-script warnings visible; the other fields are Cargo
+            // metadata that did not appear in the human-readable output.
+            "build-script-executed" => {
+                if let Some(output) = message.get("out").and_then(Value::as_str) {
+                    for line in output.lines() {
+                        if let Some(warning) = line
+                            .strip_prefix("cargo:warning=")
+                            .or_else(|| line.strip_prefix("cargo::warning="))
+                        {
+                            append_diagnostic(&mut visible_stderr, &format!("warning: {warning}"));
+                        }
+                    }
+                }
+            }
+            _ => visible_stdout.push_str(raw_line),
+        }
+    }
+
+    (
+        visible_stdout.into_bytes(),
+        visible_stderr.into_bytes(),
+        warnings_filtered,
+    )
+}
+
+fn append_diagnostic(output: &mut String, diagnostic: &str) {
+    if diagnostic.is_empty() {
+        return;
+    }
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str(diagnostic);
+    if !diagnostic.ends_with('\n') {
+        output.push('\n');
+    }
 }
 
 fn validate_cargo_arguments(is_test: bool, arguments: &CargoRunArguments) -> anyhow::Result<()> {
@@ -950,6 +1030,55 @@ mod tests {
     }
 
     #[test]
+    fn cargo_json_output_filters_rustc_warnings_and_keeps_useful_output() {
+        use super::normalize_cargo_output;
+
+        let warning = json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "warning",
+                "message": "unused item",
+                "spans": [],
+                "rendered": "warning: unused item\n"
+            }
+        });
+        let error = json!({
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "message": "type mismatch",
+                "spans": [],
+                "rendered": "error: type mismatch\n"
+            }
+        });
+        let artifact = json!({ "reason": "compiler-artifact" });
+        let finished = json!({ "reason": "build-finished", "success": false });
+        let build_script = json!({
+            "reason": "build-script-executed",
+            "out": "cargo:rerun-if-changed=build.rs\ncargo:warning=script warning\n"
+        });
+        let stdout = format!(
+            "test output\n{}\n{}\n{}\n{}\n{}\n{{\"reason\":\n{{\"application\":\"output\"}}\n",
+            warning, error, artifact, build_script, finished,
+        );
+
+        let (stdout, stderr, warnings_filtered) =
+            normalize_cargo_output(stdout.as_bytes(), b"cargo status");
+
+        assert_eq!(warnings_filtered, 1);
+        let stdout = String::from_utf8(stdout).unwrap();
+        assert!(stdout.contains("test output\n"));
+        assert!(stdout.contains("{\"reason\":\n"));
+        assert!(stdout.contains("{\"application\":\"output\"}"));
+        assert!(!stdout.contains("compiler-artifact"));
+        assert!(!stdout.contains("build-finished"));
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains("cargo status\nerror: type mismatch\n"));
+        assert!(stderr.contains("warning: script warning\n"));
+        assert!(!stderr.contains("unused item"));
+    }
+
+    #[test]
     fn cargo_arguments_reject_ambiguous_or_option_like_values() {
         use super::{CargoRunArguments, validate_cargo_arguments};
 
@@ -988,7 +1117,7 @@ mod tests {
         .unwrap();
         fs::write(
             temporary.path().join("src/lib.rs"),
-            "#[test]\nfn smoke() {}\npub fn value() -> u32 { 42 }\n",
+            "fn unused_warning_fixture() {}\n#[test]\nfn smoke() {}\npub fn value() -> u32 { 42 }\n",
         )
         .unwrap();
 
@@ -1004,6 +1133,14 @@ mod tests {
         assert_eq!(checked["status"], "passed");
         assert_eq!(checked["exit_code"], 0);
         assert_eq!(checked["lockfile_changed"], true);
+        assert!(checked["warnings_filtered"].as_u64().unwrap() >= 1);
+        assert!(!checked["stdout"].as_str().unwrap().contains("warning:"));
+        assert!(
+            !checked["stderr"]
+                .as_str()
+                .unwrap()
+                .contains("warning: unused")
+        );
 
         fs::write(
             temporary.path().join("src/lib.rs"),
@@ -1021,10 +1158,16 @@ mod tests {
         .unwrap();
         assert_eq!(failed["status"], "failed");
         assert_eq!(failed["exit_code"], 101);
+        assert!(
+            failed["stderr"]
+                .as_str()
+                .unwrap()
+                .contains("mismatched types")
+        );
 
         fs::write(
             temporary.path().join("src/lib.rs"),
-            "#[test]\nfn smoke() {}\npub fn value() -> u32 { 42 }\n",
+            "fn unused_warning_fixture() {}\n#[test]\nfn smoke() {}\npub fn value() -> u32 { 42 }\n",
         )
         .unwrap();
         let tested = run_cargo(
@@ -1042,6 +1185,14 @@ mod tests {
         assert_eq!(tested["status"], "passed");
         assert_eq!(tested["exit_code"], 0);
         assert!(tested["stdout"].as_str().unwrap().contains("smoke"));
+        assert!(tested["warnings_filtered"].as_u64().unwrap() >= 1);
+        assert!(!tested["stdout"].as_str().unwrap().contains("warning:"));
+        assert!(
+            !tested["stderr"]
+                .as_str()
+                .unwrap()
+                .contains("warning: unused")
+        );
     }
 
     #[tokio::test]
