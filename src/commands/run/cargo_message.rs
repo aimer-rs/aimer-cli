@@ -30,7 +30,6 @@ use crate::console::state::strip_ansi;
 /// output would be plain grey text.
 pub const MESSAGE_FORMAT: &str = "--message-format=json-diagnostic-rendered-ansi";
 
-
 /// Severity of a rustc diagnostic, as spelled in cargo's `level` field.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiagnosticLevel {
@@ -868,7 +867,10 @@ mod tests {
         let mut report = ErrorReport::new();
         report.record(&error_with("mismatched types", "E0308"));
 
-        for line in report_lines_at(&report, 30).iter().filter(|l| !l.is_empty()) {
+        for line in report_lines_at(&report, 30)
+            .iter()
+            .filter(|l| !l.is_empty())
+        {
             assert_eq!(line.chars().count(), 30, "{line:?}");
         }
     }

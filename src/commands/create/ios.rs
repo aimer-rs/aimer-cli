@@ -81,7 +81,10 @@ mod tests {
         let dir = scaffolded("my_app");
 
         let xcconfig = fs::read_to_string(dir.join("builds/ios").join(XCCONFIG_FILE)).unwrap();
-        assert!(xcconfig.contains(&format!("{LDFLAGS_SETTING} = ")), "{xcconfig}");
+        assert!(
+            xcconfig.contains(&format!("{LDFLAGS_SETTING} = ")),
+            "{xcconfig}"
+        );
         assert!(xcconfig.contains("-framework CoreHaptics"), "{xcconfig}");
     }
 
@@ -94,7 +97,10 @@ mod tests {
         // The frameworks are never spelled out in the project: they come from
         // the generated xcconfig, so a new Apple binding on the Rust side
         // needs no Xcode change.
-        assert!(pbxproj.contains(&format!("$({LDFLAGS_SETTING})")), "{pbxproj}");
+        assert!(
+            pbxproj.contains(&format!("$({LDFLAGS_SETTING})")),
+            "{pbxproj}"
+        );
         assert!(pbxproj.contains("baseConfigurationReference"), "{pbxproj}");
         assert!(!pbxproj.contains("\"-framework\","), "{pbxproj}");
     }
@@ -114,7 +120,10 @@ mod tests {
             // newline would submit the field mid-composition.
             "replayed(announced, on: mirroredText) == actual",
         ] {
-            assert!(swift.contains(required), "missing {required} in generated main.swift");
+            assert!(
+                swift.contains(required),
+                "missing {required} in generated main.swift"
+            );
         }
         assert!(!swift.contains("private let placeholder"), "{swift}");
     }

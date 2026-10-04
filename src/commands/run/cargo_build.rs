@@ -7,8 +7,8 @@ use std::time::Duration;
 use crossbeam::channel::Sender;
 
 use crate::commands::assemble::link_flags;
-use crate::commands::run::cargo_message::{self, CargoMessage, ErrorReport, RenderedDiagnostics};
 use crate::commands::run::capability_sources::configure_command;
+use crate::commands::run::cargo_message::{self, CargoMessage, ErrorReport, RenderedDiagnostics};
 use crate::commands::run::console::{RunnerEvent, Status};
 use crate::commands::run::utilities::LogStyling;
 
@@ -19,10 +19,18 @@ pub enum CargoBuildTarget {
     /// Desktop apps are launched as a real executable rather than linked into
     /// a platform shell, so this is the one leg that asks cargo for a `--bin`
     /// instead of `--lib`.
-    Desktop { bin_name: String },
-    Ios { rust_target: String },
-    IosSim { rust_target: String },
-    Android { rust_target: String },
+    Desktop {
+        bin_name: String,
+    },
+    Ios {
+        rust_target: String,
+    },
+    IosSim {
+        rust_target: String,
+    },
+    Android {
+        rust_target: String,
+    },
     Web,
 }
 
@@ -38,7 +46,10 @@ impl CargoBuildTarget {
     /// JSON. Both therefore go through [`RenderedDiagnostics`] instead, which
     /// recovers the very same [`ErrorReport`] from that rendering.
     fn speaks_cargo_json(&self) -> bool {
-        !matches!(self, CargoBuildTarget::Web | CargoBuildTarget::Android { .. })
+        !matches!(
+            self,
+            CargoBuildTarget::Web | CargoBuildTarget::Android { .. }
+        )
     }
 }
 
@@ -547,7 +558,10 @@ mod tests {
             },
             false,
         );
-        assert!(!args.iter().any(|a| a.contains("--message-format")), "{args:?}");
+        assert!(
+            !args.iter().any(|a| a.contains("--message-format")),
+            "{args:?}"
+        );
     }
 
     /// Collect every app log the reader thread produces for `input`, as the

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,86 @@ struct UserConfig {
 struct McpConfig {
     #[serde(default = "default_true")]
     auto_start: bool,
+    #[serde(default)]
+    rust_analyzer: Option<RustAnalyzerUserConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RustAnalyzerUserConfig {
+    #[serde(default)]
+    binary_path: Option<PathBuf>,
+    #[serde(default)]
+    allow_network: bool,
+}
+
+/// User settings for the optional rust-analyzer MCP integration.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RustAnalyzerConfig {
+    /// Optional path to a rust-analyzer executable. If omitted, PATH is used.
+    pub binary_path: Option<PathBuf>,
+    /// Whether Cargo commands started by Rust MCP tools may use the network.
+    pub allow_network: bool,
+}
+
+/// Load rust-analyzer MCP settings from `~/.aimer/config.toml`.
+///
+/// Invalid optional settings fall back to offline defaults so they cannot
+/// prevent normal MCP or application startup.
+pub fn rust_analyzer_config() -> RustAnalyzerConfig {
+    let Some(home) = dirs::home_dir() else {
+        return RustAnalyzerConfig::default();
+    };
+    let path = home.join(".aimer/config.toml");
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return RustAnalyzerConfig::default();
+    };
+    match rust_analyzer_config_from(&contents) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::debug!(error = %error, "ignoring invalid rust-analyzer MCP configuration");
+            RustAnalyzerConfig::default()
+        }
+    }
+}
+
+fn rust_analyzer_config_from(contents: &str) -> Result<RustAnalyzerConfig, String> {
+    let config: UserConfig = toml::from_str(contents).map_err(|error| error.to_string())?;
+    Ok(config
+        .mcp
+        .and_then(|mcp| mcp.rust_analyzer)
+        .map(|settings| RustAnalyzerConfig {
+            binary_path: settings.binary_path,
+            allow_network: settings.allow_network,
+        })
+        .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod rust_analyzer_config_tests {
+    use super::{RustAnalyzerConfig, rust_analyzer_config_from};
+    use std::path::PathBuf;
+
+    #[test]
+    fn rust_analyzer_config_defaults_to_offline_and_path_lookup() {
+        assert_eq!(
+            rust_analyzer_config_from("[mcp]\nauto_start = false\n").unwrap(),
+            RustAnalyzerConfig::default()
+        );
+    }
+
+    #[test]
+    fn rust_analyzer_config_reads_binary_override_and_network_opt_in() {
+        let config = rust_analyzer_config_from(
+            "[mcp.rust_analyzer]\nbinary_path = \"/tools/rust-analyzer\"\nallow_network = true\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.binary_path,
+            Some(PathBuf::from("/tools/rust-analyzer"))
+        );
+        assert!(config.allow_network);
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -393,7 +473,9 @@ impl AimerManifest {
     /// Portable application entry declared for WASM hot reload, if any.
     #[inline]
     pub fn hot_reload_guest(&self) -> Option<&HotReloadGuestMeta> {
-        self.build.as_ref().and_then(|build| build.hot_reload.as_ref())
+        self.build
+            .as_ref()
+            .and_then(|build| build.hot_reload.as_ref())
     }
 }
 
@@ -459,27 +541,65 @@ mod tests {
 
     #[test]
     fn resource_monitor_config_rejects_out_of_range_values() {
-        assert!(resource_monitor_config_from(
-            "[resource_monitor]\nsample_interval_ms = 499\n"
-        )
-        .is_err());
-        assert!(resource_monitor_config_from(
-            "[resource_monitor]\nretention_days = 3651\n"
-        )
-        .is_err());
+        assert!(
+            resource_monitor_config_from("[resource_monitor]\nsample_interval_ms = 499\n").is_err()
+        );
+        assert!(
+            resource_monitor_config_from("[resource_monitor]\nretention_days = 3651\n").is_err()
+        );
     }
 
     #[test]
     fn execution_policy_accepts_only_the_supported_matrix() {
         let cases = [
-            (BuildProfile::Debug, ApplicationRuntime::Wasmi, ReloadPolicy::HotReload, true),
-            (BuildProfile::Debug, ApplicationRuntime::Wasmi, ReloadPolicy::Disabled, false),
-            (BuildProfile::Debug, ApplicationRuntime::NativeAot, ReloadPolicy::HotReload, false),
-            (BuildProfile::Debug, ApplicationRuntime::NativeAot, ReloadPolicy::Disabled, true),
-            (BuildProfile::Release, ApplicationRuntime::Wasmi, ReloadPolicy::HotReload, false),
-            (BuildProfile::Release, ApplicationRuntime::Wasmi, ReloadPolicy::Disabled, false),
-            (BuildProfile::Release, ApplicationRuntime::NativeAot, ReloadPolicy::HotReload, false),
-            (BuildProfile::Release, ApplicationRuntime::NativeAot, ReloadPolicy::Disabled, true),
+            (
+                BuildProfile::Debug,
+                ApplicationRuntime::Wasmi,
+                ReloadPolicy::HotReload,
+                true,
+            ),
+            (
+                BuildProfile::Debug,
+                ApplicationRuntime::Wasmi,
+                ReloadPolicy::Disabled,
+                false,
+            ),
+            (
+                BuildProfile::Debug,
+                ApplicationRuntime::NativeAot,
+                ReloadPolicy::HotReload,
+                false,
+            ),
+            (
+                BuildProfile::Debug,
+                ApplicationRuntime::NativeAot,
+                ReloadPolicy::Disabled,
+                true,
+            ),
+            (
+                BuildProfile::Release,
+                ApplicationRuntime::Wasmi,
+                ReloadPolicy::HotReload,
+                false,
+            ),
+            (
+                BuildProfile::Release,
+                ApplicationRuntime::Wasmi,
+                ReloadPolicy::Disabled,
+                false,
+            ),
+            (
+                BuildProfile::Release,
+                ApplicationRuntime::NativeAot,
+                ReloadPolicy::HotReload,
+                false,
+            ),
+            (
+                BuildProfile::Release,
+                ApplicationRuntime::NativeAot,
+                ReloadPolicy::Disabled,
+                true,
+            ),
         ];
 
         for (profile, runtime, reload, allowed) in cases {
@@ -563,9 +683,11 @@ mod tests {
         assert_eq!(guest.package(), "counter_app");
         assert_eq!(guest.program(), "CounterProgram");
         assert_eq!(guest.limits(), "HOT_RELOAD_LIMITS");
-        assert!(AimerManifest::new("app", "0.1.0", "", "", "com.example.app")
-            .hot_reload_guest()
-            .is_none());
+        assert!(
+            AimerManifest::new("app", "0.1.0", "", "", "com.example.app")
+                .hot_reload_guest()
+                .is_none()
+        );
     }
 
     #[test]

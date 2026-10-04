@@ -84,7 +84,11 @@ pub fn panel(rendered: &[String], width: usize) -> Vec<String> {
     let mut lines = Vec::with_capacity(rendered.len() + 2);
     lines.push(panel_line("", width));
     for line in rendered {
-        lines.extend(wrap_ansi(line, width).iter().map(|row| panel_line(row, width)));
+        lines.extend(
+            wrap_ansi(line, width)
+                .iter()
+                .map(|row| panel_line(row, width)),
+        );
     }
     lines.push(panel_line("", width));
     lines

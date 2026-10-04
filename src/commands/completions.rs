@@ -1,11 +1,11 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+use crate::Cli;
 use anyhow::{Context, anyhow};
 use clap::CommandFactory;
 use clap_complete::Shell;
 use clap_complete::env::Shells;
-use crate::Cli;
 
 /// Environment variable the generated scripts use to ask the binary for
 /// completions at completion time. Must match the variable inspected by
@@ -24,9 +24,6 @@ const COMPLETE_VAR: &str = "COMPLETE";
 /// conventional per-user completion directory and an activation hint is
 /// printed.
 pub fn execute(shell: Shell, install: bool) -> anyhow::Result<()> {
-
-
-
     let cmd = Cli::command();
 
     let bin_name = cmd.get_name().to_string();
@@ -43,7 +40,6 @@ pub fn execute(shell: Shell, install: bool) -> anyhow::Result<()> {
     let completer_bin = &bin_name;
 
     if !install {
-
         let mut buf = Vec::new();
 
         completer
@@ -111,7 +107,6 @@ fn data_dir() -> anyhow::Result<PathBuf> {
 
 /// Compute the install location and activation hint for the given shell.
 fn install_target(shell: Shell, bin: &str) -> anyhow::Result<InstallTarget> {
-
     match shell {
         Shell::Fish => Ok(InstallTarget {
             dir: {

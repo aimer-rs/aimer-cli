@@ -55,7 +55,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         bin: "llvm-ar",
         probe: &["--version"],
-        purpose: "Web (optional for building markdown syntax highlight)"
+        purpose: "Web (optional for building markdown syntax highlight)",
     },
     #[cfg(target_os = "linux")]
     Tool {
@@ -192,5 +192,3 @@ fn report_rust_targets() -> usize {
 
     missing.len()
 }
-
-

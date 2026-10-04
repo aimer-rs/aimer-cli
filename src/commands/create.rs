@@ -306,7 +306,11 @@ mod tests {
         let cargo_manifest = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
         let cargo_manifest: toml::Value = toml::from_str(&cargo_manifest).unwrap();
         let crate_types = cargo_manifest["lib"]["crate-type"].as_array().unwrap();
-        assert!(crate_types.iter().any(|value| value.as_str() == Some("rlib")));
+        assert!(
+            crate_types
+                .iter()
+                .any(|value| value.as_str() == Some("rlib"))
+        );
 
         // aimer.toml round-trips with the collected metadata.
         let manifest = AimerManifest::load_from(&dir).unwrap().unwrap();

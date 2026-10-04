@@ -1,6 +1,6 @@
+use crossbeam::channel::Sender;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use crossbeam::channel::Sender;
 
 use crate::commands::assemble::{self, IosPlan};
 use crate::commands::run::Device;

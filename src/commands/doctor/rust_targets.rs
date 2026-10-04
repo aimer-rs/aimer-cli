@@ -124,7 +124,8 @@ mod tests {
     use super::*;
 
     /// A realistic payload, with the quirks the parser has to survive.
-    const PAYLOAD: &str = "aarch64-apple-darwin\r\n\nwasm32-unknown-unknown (installed)\n  aarch64-linux-android  \n";
+    const PAYLOAD: &str =
+        "aarch64-apple-darwin\r\n\nwasm32-unknown-unknown (installed)\n  aarch64-linux-android  \n";
 
     #[test]
     fn parsing_recovers_every_triple() {

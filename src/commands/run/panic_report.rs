@@ -297,9 +297,9 @@ mod tests {
         let lines = plain_lines(&report, 120);
 
         assert!(
-            lines
-                .iter()
-                .any(|l| l.trim_start().starts_with("Panicked: Widget `HttpRequestButton`")),
+            lines.iter().any(|l| l
+                .trim_start()
+                .starts_with("Panicked: Widget `HttpRequestButton`")),
             "{lines:?}"
         );
     }
@@ -373,7 +373,11 @@ mod tests {
     #[test]
     fn consecutive_panics_do_not_all_get_the_same_title() {
         let titles: HashSet<&str> = (0..50)
-            .map(|_| PanicReport::of(&panic_record()).expect("a panic report").title)
+            .map(|_| {
+                PanicReport::of(&panic_record())
+                    .expect("a panic report")
+                    .title
+            })
             .collect();
 
         assert!(titles.len() > 1, "{titles:?}");

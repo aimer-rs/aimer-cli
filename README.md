@@ -477,6 +477,27 @@ Once connected, your AI assistant can execute the following tools:
 - `aimer_get_resource_recording`: Read paginated samples from a prior run.
 - `aimer_get_crate_docs`: Read crate or item documentation from docs.rs. A trait lookup includes its rendered declaration, method signatures, required/provided status, and each method's documentation. The tool resolves an omitted version from the attached project's `Cargo.lock` and caches the crate's Rustdoc JSON index for offline lookups.
 - `aimer_search_crate_docs`: Search public item names, paths, and documentation text within a crate. Results include item paths and short documentation summaries; pass a result's path to `aimer_get_crate_docs` to read the full item documentation.
+- `aimer_rust_start_lsp`: Start or reuse rust-analyzer for `project_path`; wait for workspace indexing with progress notifications and return ready status. `project_path` may be an absolute path or a path relative to the current Rust project. Omitting it uses the current project.
+- `aimer_rust_search_symbols`, `aimer_rust_search_text`, `aimer_rust_get_document_symbols`, and `aimer_rust_completion`: Search Rust workspace symbols and project text, inspect a file's symbol outline, or get context-aware completion suggestions.
+- `aimer_rust_find_definition`, `aimer_rust_find_declaration`, `aimer_rust_type_definition`, `aimer_rust_find_references`, `aimer_rust_find_implementations`, `aimer_rust_hover`, `aimer_rust_get_call_hierarchy`, and `aimer_rust_expand_macro`: Navigate Rust code using rust-analyzer's semantic model.
+- `aimer_rust_signature_help`, `aimer_rust_document_highlights`, `aimer_rust_inlay_hints`, and `aimer_rust_get_code_lenses`: Inspect call signatures, local symbol occurrences, inferred hints, and code lenses.
+- `aimer_rust_get_diagnostics` and `aimer_rust_check`: Read current diagnostics or trigger rust-analyzer's Cargo flycheck and return structured diagnostics.
+- `aimer_rust_get_code_actions`, `aimer_rust_prepare_rename`, `aimer_rust_rename_symbol`, `aimer_rust_preview_code_action`, `aimer_rust_format`, and `aimer_rust_apply_edit`: Prepare bounded edit previews and apply a preview after review.
+- `aimer_rust_get_manifest` and `aimer_rust_get_project_metadata`: Read parsed `Cargo.toml` data or the selected workspace's bounded Cargo package and dependency metadata. Metadata uses `--locked` and does not update the project's lockfile.
+- `aimer_rust_preview_manifest_edit`: Preview ordered `set` or `remove` operations on a `Cargo.toml` key path. The tool parses the candidate and runs Cargo metadata in a temporary workspace; invalid previews cannot be applied. Apply an applicable preview with `aimer_rust_apply_edit`.
+- `aimer_rust_cargo_check` and `aimer_rust_cargo_test`: Run Cargo check or test for the selected workspace or a package and return the actual exit code with bounded stdout and stderr. Both tools accept target and feature selection; test also accepts a test-name filter. `locked` defaults to Cargo's normal behavior, and the result reports whether `Cargo.lock` changed. Each call has a five-minute timeout.
+
+Rust code tools require `rust-analyzer` on `PATH`. A custom binary and Cargo network policy can be set in `~/.aimer/config.toml`:
+
+```toml
+[mcp.rust_analyzer]
+# Optional; defaults to finding rust-analyzer on PATH.
+binary_path = "/path/to/rust-analyzer"
+# Defaults to false. When false, Cargo calls made by Rust MCP tools run offline.
+allow_network = false
+```
+
+The LSP process starts lazily when a Rust tool is first called, or explicitly through `aimer_rust_start_lsp`. The start tool waits for indexing and reports progress while rust-analyzer loads. The MCP server owns the rust-analyzer process and terminates it when the Agent disconnects and the MCP stdio process exits. Rust Analyzer enables build scripts and procedural macros for more complete analysis. `aimer_rust_check` triggers rust-analyzer's Clippy flycheck rather than starting Cargo directly; `aimer_rust_cargo_check` and `aimer_rust_cargo_test` run Cargo directly and return its exit code. Code edits are returned as previews and are only written after `aimer_rust_apply_edit`; stale previews are rejected. Manifest previews preserve existing TOML comments and formatting, and applying one asks rust-analyzer to reload the workspace. The rust-analyzer network setting applies to Cargo work launched by rust-analyzer and the new Cargo tools. Existing docs.rs tools retain their separate network and cache behavior.
 
 The same docs.rs features are available directly from the CLI. It prints JSON, which makes the output easy to pipe into other tools:
 

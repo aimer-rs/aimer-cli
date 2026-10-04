@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam::channel::Sender;
 use crate::commands::assemble::{self, AndroidPlan};
 use crate::commands::run::cargo_build::{
     self, CargoBuildTarget, stream_as_app_log_split_cr, wait_for_child,
@@ -16,6 +15,7 @@ use crate::commands::run::helpers::{
 };
 use crate::commands::run::pipeline::{Flow, RunContext, Runner};
 use crate::commands::run::utilities::{AppOutput, LogStyling};
+use crossbeam::channel::Sender;
 
 /// Application id used when `build.gradle.kts.template` cannot be read.
 const FALLBACK_APP_ID: &str = "com.example.app";
@@ -93,14 +93,12 @@ fn logcat_tag(line: &str) -> Option<&str> {
 /// Whether `line` is framework chatter from one of the [`SYSTEM_NOISE_TAGS`]
 /// rather than something the app said.
 fn is_app_log(line: &str, app_id: &str) -> bool {
-
     if line.contains(app_id) && line.contains("RustStdoutStderr") {
         return true;
     }
 
     !logcat_tag(line).is_some_and(|tag| SYSTEM_NOISE_TAGS.contains(&tag))
 }
-
 
 /// The `adb logcat` arguments that narrow the log down to the app.
 ///
@@ -130,7 +128,6 @@ fn logcat_args(pid: Option<&str>) -> Vec<String> {
 /// filter to the one thing it does exactly — the process — while still leaving
 /// the pane with the app's output only.
 fn stream_logcat(pipe: impl Read + Send + 'static, tx: Sender<RunnerEvent>) {
-
     thread::spawn(move || {
         let reader = BufReader::new(pipe);
         let app_id = RUNNING_APP_ID.get().cloned().unwrap_or_default();
@@ -476,7 +473,10 @@ mod tests {
             Some("RustStdoutStderr")
         );
         // A stack trace continuation, and plain output, carry no framing.
-        assert_eq!(logcat_tag("\tat java.lang.Thread.run(Thread.java:1571)"), None);
+        assert_eq!(
+            logcat_tag("\tat java.lang.Thread.run(Thread.java:1571)"),
+            None
+        );
         assert_eq!(logcat_tag("plain println output"), None);
     }
 
@@ -509,10 +509,12 @@ mod tests {
     #[test]
     fn framework_chatter_inside_the_app_process_is_dropped() {
         assert!(!is_app_log(
-            "08-03 01:50:59.852 W/libc    ( 5818): Access denied finding property \"x\"",set_global_app_id()
+            "08-03 01:50:59.852 W/libc    ( 5818): Access denied finding property \"x\"",
+            set_global_app_id()
         ));
         assert!(!is_app_log(
-            "08-03 01:50:59.852 D/nativeloader( 5818): classloader namespace",set_global_app_id()
+            "08-03 01:50:59.852 D/nativeloader( 5818): classloader namespace",
+            set_global_app_id()
         ));
     }
 
@@ -524,7 +526,7 @@ mod tests {
             "\tat com.aimer.AimerActivity.onCreate(AimerActivity.kt:31)",
             "plain println output",
         ] {
-            assert!(is_app_log(line,set_global_app_id()), "{line:?}");
+            assert!(is_app_log(line, set_global_app_id()), "{line:?}");
         }
     }
 

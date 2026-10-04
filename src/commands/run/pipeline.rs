@@ -8,8 +8,8 @@ use crossbeam::channel::Sender;
 
 use crate::commands::run::Device;
 use crate::commands::run::android::AndroidRunner;
-use crate::commands::run::cargo_build::{CargoBuildTarget, cargo_command, wait_for_child};
 use crate::commands::run::capability_sources::configure_command;
+use crate::commands::run::cargo_build::{CargoBuildTarget, cargo_command, wait_for_child};
 use crate::commands::run::console::{RunnerEvent, Status};
 use crate::commands::run::desktop::DesktopRunner;
 use crate::commands::run::helpers::set_status;

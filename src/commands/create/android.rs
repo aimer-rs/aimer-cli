@@ -238,7 +238,10 @@ mod tests {
                 "composingStart: Int",
                 "composingEnd: Int",
             ] {
-                assert!(source.contains(parameter), "missing JNI parameter {parameter}");
+                assert!(
+                    source.contains(parameter),
+                    "missing JNI parameter {parameter}"
+                );
             }
             assert!(!source.contains("external fun nativeInsertText"));
             assert!(!source.contains("external fun nativeSetComposingText"));
@@ -274,7 +277,10 @@ mod tests {
                 "suppressCallbacks = true",
                 "suppressCallbacks = false",
             ] {
-                assert!(source.contains(required), "missing {required} in generated activity");
+                assert!(
+                    source.contains(required),
+                    "missing {required} in generated activity"
+                );
             }
             assert!(!source.contains("PLACEHOLDER"));
         });

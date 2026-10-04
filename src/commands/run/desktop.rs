@@ -1,6 +1,5 @@
 use std::process::{Command, Stdio};
 
-
 use crate::commands::assemble;
 use crate::commands::run::cargo_build::{
     self, CargoBuildTarget, stream_stderr_as_app_log, stream_stdout_as_app_log,
@@ -10,8 +9,6 @@ use crate::commands::run::helpers::{ConsoleReporter, build_log, fail, set_status
 use crate::commands::run::pipeline::{Flow, RunContext, Runner};
 use crate::consts::{JSON_OUTPUT_ENV, JSON_OUTPUT_FLAG};
 use crate::targets::Targets;
-
-
 
 /// The Windows/Linux leg of the unified pipeline: `cargo build --bin` → the
 /// shared [`package_desktop`](assemble::package_desktop) step → launch the

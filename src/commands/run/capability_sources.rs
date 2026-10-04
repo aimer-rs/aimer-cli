@@ -112,9 +112,7 @@ fn write_source_map(map: &PackageSourceMap) -> Result<PathBuf, String> {
 
 fn canonical_source(source: &str) -> String {
     if let Some(git) = source.strip_prefix("git+") {
-        let end = git
-            .find(['?', '#'])
-            .unwrap_or(git.len());
+        let end = git.find(['?', '#']).unwrap_or(git.len());
         format!("git+{}", &git[..end])
     } else {
         source.to_owned()

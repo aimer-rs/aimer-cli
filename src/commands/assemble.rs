@@ -243,9 +243,7 @@ fn xcode_command(
         cmd.arg("-sdk").arg(sdk);
     }
     if let Some(library) = force_load_library {
-        cmd.arg(format!(
-            "OTHER_LDFLAGS=$(inherited) -force_load {library}"
-        ));
+        cmd.arg(format!("OTHER_LDFLAGS=$(inherited) -force_load {library}"));
     }
     cmd.arg("SYMROOT=build")
         .arg("-arch")
@@ -319,7 +317,6 @@ pub(crate) fn desktop_exe_path(pkg_name: &str, release: bool) -> String {
         profile_name(release),
         std::env::consts::EXE_SUFFIX
     )
-
 }
 
 /// The file name the executable carries inside the bundle.
@@ -396,8 +393,8 @@ fn package_macos_with_options(
     clean_bundle(&artifact)?;
 
     let arch = host_arch();
-    let force_load_library = force_load_rust_library
-        .then(|| format!("$(SRCROOT)/Libraries/lib{lib_name}.a"));
+    let force_load_library =
+        force_load_rust_library.then(|| format!("$(SRCROOT)/Libraries/lib{lib_name}.a"));
     reporter.note(format!("Building Xcode project for {arch}..."));
     reporter.run(
         xcode_command(
@@ -782,7 +779,11 @@ fn copy_desktop_extras(
     let scaffold = root.join(format!("builds/{target}"));
     match target {
         Targets::Linux => {
-            copy_extra(&scaffold.join("app.png"), &bundle_dir.join("app.png"), reporter)?;
+            copy_extra(
+                &scaffold.join("app.png"),
+                &bundle_dir.join("app.png"),
+                reporter,
+            )?;
             let entry = [
                 scaffold.join(format!("{pkg_name}.desktop")),
                 scaffold.join("app.desktop"),
@@ -804,7 +805,11 @@ fn copy_desktop_extras(
             }
         }
         Targets::Windows => {
-            copy_extra(&scaffold.join("app.ico"), &bundle_dir.join("app.ico"), reporter)?;
+            copy_extra(
+                &scaffold.join("app.ico"),
+                &bundle_dir.join("app.ico"),
+                reporter,
+            )?;
             copy_extra(
                 &scaffold.join("app.manifest"),
                 &bundle_dir.join(format!("{}.manifest", desktop_exe_name(pkg_name))),
@@ -1292,14 +1297,7 @@ mod tests {
 
     #[test]
     fn xcode_command_carries_the_configuration_and_no_sdk_on_macos() {
-        let cmd = xcode_command(
-            "builds/macos",
-            "my_app",
-            "Release",
-            None,
-            "arm64",
-            None,
-        );
+        let cmd = xcode_command("builds/macos", "my_app", "Release", None, "arm64", None);
         let args = args_of(&cmd);
         assert!(args.contains(&"-configuration".to_string()));
         assert!(args.contains(&"Release".to_string()));
@@ -1319,8 +1317,7 @@ mod tests {
         );
         let args = args_of(&cmd);
         assert!(args.contains(
-            &"OTHER_LDFLAGS=$(inherited) -force_load $(SRCROOT)/Libraries/libmy_app.a"
-                .to_string()
+            &"OTHER_LDFLAGS=$(inherited) -force_load $(SRCROOT)/Libraries/libmy_app.a".to_string()
         ));
     }
 

@@ -1,7 +1,7 @@
 pub mod android;
+pub(crate) mod capability_sources;
 pub(crate) mod cargo_build;
 pub(crate) mod cargo_message;
-pub(crate) mod capability_sources;
 pub mod desktop;
 pub(crate) mod framed_block;
 pub(crate) mod helpers;
@@ -257,11 +257,9 @@ enum PipelineSelection {
 
 fn native_pipeline_release(policy: ExecutionPolicy) -> PipelineSelection {
     match (policy.runtime(), policy.reload()) {
-        (ApplicationRuntime::NativeAot, ReloadPolicy::Disabled) => {
-            PipelineSelection::Native {
-                release: policy.profile() == BuildProfile::Release,
-            }
-        }
+        (ApplicationRuntime::NativeAot, ReloadPolicy::Disabled) => PipelineSelection::Native {
+            release: policy.profile() == BuildProfile::Release,
+        },
         (ApplicationRuntime::Wasmi, ReloadPolicy::HotReload) => PipelineSelection::HotReload,
         _ => unreachable!("ExecutionPolicy guarantees a supported runtime and reload combination"),
     }
@@ -283,8 +281,8 @@ pub fn execute(
 ) -> anyhow::Result<()> {
     let selection = native_pipeline_release(policy);
 
-    let project_root = get_project_root(false)
-        .map_err(|_| anyhow!("aimer.toml not found in project root"))?;
+    let project_root =
+        get_project_root(false).map_err(|_| anyhow!("aimer.toml not found in project root"))?;
     if crate::config::AimerManifest::load_from(&project_root)?.is_none()
         && !manifest_is_optional(policy)
     {
@@ -311,8 +309,6 @@ pub fn execute(
                 if let Ok(mut devs) = devices_arc_clone.lock() {
                     *devs = new_devices;
                 }
-
-
             }
         });
 
@@ -390,7 +386,7 @@ pub fn execute(
             policy.reload() == ReloadPolicy::HotReload,
             session,
         )
-            .context("inline console exited with an error")?;
+        .context("inline console exited with an error")?;
     } else {
         console::start(selected_device, pkg_name, release, session)
             .context("interactive console exited with an error")?;
@@ -405,16 +401,16 @@ fn run_hot_reload(
     _: ExecutionPolicy,
     verbose_widget_ir: bool,
 ) -> anyhow::Result<()> {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    use aimer_cli::hot_reload::pipeline::{ProductionPipelineDriver, run_pipeline};
-    use aimer_cli::hot_reload::system::{SystemDevice, SystemPipelineOperations};
-    use aimer_cli::hot_reload::targets::TargetFamily;
     use aimer_cli::config::{
         ApplicationRuntime as LibraryRuntime, BuildProfile as LibraryProfile,
         ExecutionPolicy as LibraryPolicy, ReloadPolicy as LibraryReload,
     };
+    use aimer_cli::hot_reload::pipeline::{ProductionPipelineDriver, run_pipeline};
+    use aimer_cli::hot_reload::system::{SystemDevice, SystemPipelineOperations};
+    use aimer_cli::hot_reload::targets::TargetFamily;
 
     use self::hot_reload_runtime::CliHotReloadRuntime;
 
@@ -504,10 +500,10 @@ fn resolve_device_from(
         .into_iter()
         .filter(|device| device.target == parsed && device.target != Terminated);
     let Some(selected) = matching.next() else {
-        return Err(
-            AimerError::DeviceNotFound(format!("no connected device for target '{target}'"))
-                .into(),
-        );
+        return Err(AimerError::DeviceNotFound(format!(
+            "no connected device for target '{target}'"
+        ))
+        .into());
     };
     let Some(second) = matching.next() else {
         return Ok(selected);
@@ -668,7 +664,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(native_pipeline_release(policy), PipelineSelection::HotReload);
+        assert_eq!(
+            native_pipeline_release(policy),
+            PipelineSelection::HotReload
+        );
     }
 
     #[test]

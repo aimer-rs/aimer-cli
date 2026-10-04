@@ -363,7 +363,12 @@ mod tests {
         let AppOutput::Panic(report) = line.process_app_output() else {
             panic!("a recovered panic must not be shown as an ordinary log line");
         };
-        assert!(report.lines_with_width(80).iter().any(|l| l.contains("boom")));
+        assert!(
+            report
+                .lines_with_width(80)
+                .iter()
+                .any(|l| l.contains("boom"))
+        );
     }
 
     #[test]
@@ -379,7 +384,8 @@ mod tests {
 
     #[test]
     fn process_app_output_forwards_plain_output_as_a_log_line() {
-        let AppOutput::Log(styled) = "just a normal message".to_string().process_app_output() else {
+        let AppOutput::Log(styled) = "just a normal message".to_string().process_app_output()
+        else {
             panic!("plain output is not a panic");
         };
         assert_eq!(styled.render(true), "just a normal message");

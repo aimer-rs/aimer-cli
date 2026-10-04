@@ -167,9 +167,12 @@ fn install_toml(path: &Path, executable: &Path, args: &[String]) -> Result<bool>
         TomlValue::Table(TomlTable::new())
     };
 
-    let root = document
-        .as_table_mut()
-        .ok_or_else(|| anyhow!("MCP configuration '{}' must contain a TOML table", path.display()))?;
+    let root = document.as_table_mut().ok_or_else(|| {
+        anyhow!(
+            "MCP configuration '{}' must contain a TOML table",
+            path.display()
+        )
+    })?;
     let servers = root
         .entry("mcp_servers")
         .or_insert_with(|| TomlValue::Table(TomlTable::new()))
@@ -179,7 +182,12 @@ fn install_toml(path: &Path, executable: &Path, args: &[String]) -> Result<bool>
         .entry("aimer")
         .or_insert_with(|| TomlValue::Table(TomlTable::new()))
         .as_table_mut()
-        .ok_or_else(|| anyhow!("'mcp_servers.aimer' in '{}' must be a TOML table", path.display()))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "'mcp_servers.aimer' in '{}' must be a TOML table",
+                path.display()
+            )
+        })?;
 
     server.insert(
         "command".to_string(),
@@ -205,9 +213,12 @@ fn install_json(path: &Path, executable: &Path, args: &[String]) -> Result<bool>
         JsonValue::Object(JsonMap::new())
     };
 
-    let root = document
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("MCP configuration '{}' must contain a JSON object", path.display()))?;
+    let root = document.as_object_mut().ok_or_else(|| {
+        anyhow!(
+            "MCP configuration '{}' must contain a JSON object",
+            path.display()
+        )
+    })?;
     let servers = root
         .entry("mcpServers")
         .or_insert_with(|| JsonValue::Object(JsonMap::new()))
@@ -217,7 +228,12 @@ fn install_json(path: &Path, executable: &Path, args: &[String]) -> Result<bool>
         .entry("aimer")
         .or_insert_with(|| JsonValue::Object(JsonMap::new()))
         .as_object_mut()
-        .ok_or_else(|| anyhow!("'mcpServers.aimer' in '{}' must be a JSON object", path.display()))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "'mcpServers.aimer' in '{}' must be a JSON object",
+                path.display()
+            )
+        })?;
 
     server.insert(
         "command".to_string(),
@@ -242,27 +258,39 @@ fn write_if_changed(path: &Path, contents: &[u8]) -> Result<bool> {
     }
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating MCP configuration directory '{}'", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "creating MCP configuration directory '{}'",
+                parent.display()
+            )
+        })?;
     }
 
     let temporary = path.with_file_name(format!(
         ".{}.{}.tmp",
-        path.file_name().and_then(|name| name.to_str()).unwrap_or("mcp"),
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("mcp"),
         Uuid::new_v4()
     ));
-    fs::write(&temporary, contents)
-        .with_context(|| format!("writing temporary MCP configuration '{}'", temporary.display()))?;
+    fs::write(&temporary, contents).with_context(|| {
+        format!(
+            "writing temporary MCP configuration '{}'",
+            temporary.display()
+        )
+    })?;
 
     if let Ok(metadata) = fs::metadata(path) {
         fs::set_permissions(&temporary, metadata.permissions()).with_context(|| {
-            format!("preserving permissions for MCP configuration '{}'", path.display())
+            format!(
+                "preserving permissions for MCP configuration '{}'",
+                path.display()
+            )
         })?;
     } else {
         #[cfg(unix)]
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).with_context(|| {
-            format!("securing new MCP configuration '{}'", path.display())
-        })?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("securing new MCP configuration '{}'", path.display()))?;
     }
 
     if let Err(error) = fs::rename(&temporary, path) {
@@ -391,8 +419,14 @@ mod tests {
         ] {
             let config: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
-            assert_eq!(config["mcpServers"]["aimer"]["command"], "/opt/aimer/bin/aimer");
-            assert_eq!(config["mcpServers"]["aimer"]["args"], serde_json::json!(["mcp"]));
+            assert_eq!(
+                config["mcpServers"]["aimer"]["command"],
+                "/opt/aimer/bin/aimer"
+            );
+            assert_eq!(
+                config["mcpServers"]["aimer"]["args"],
+                serde_json::json!(["mcp"])
+            );
         }
     }
 
