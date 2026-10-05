@@ -1,11 +1,11 @@
-//! A small rust-analyzer LSP client used by Aimer's MCP adapter.
+//! MCP adapter for Aimer's embedded rust-analyzer IDE engine.
 //!
-//! The MCP process owns one rust-analyzer process for its selected project,
-//! started on the first Rust request or explicitly by the start tool. The
-//! client deliberately exposes structured JSON instead of LSP's raw protocol
-//! messages.
+//! The MCP process owns the selected in-process analysis database and exposes
+//! compact JSON results while keeping existing tool names and arguments stable.
 
-use std::collections::{HashMap, HashSet};
+#[cfg(feature = "legacy-lsp")]
+use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -13,29 +13,55 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
+use regex::RegexBuilder;
 use rmcp::model::{ProgressNotificationParam, ProgressToken};
 use rmcp::service::RequestContext;
-use rmcp::{Peer, RoleServer};
+use rmcp::{Peer, RoleServer, schemars};
 use serde_json::{Map, Value, json};
 use syn::visit::Visit;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::io::AsyncWriteExt;
+#[cfg(feature = "legacy-lsp")]
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::process::Command;
+#[cfg(feature = "legacy-lsp")]
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{Mutex, mpsc};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-const MAX_LSP_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_PENDING_LSP_MESSAGES: usize = 128;
+use super::mcp_ra_engine::EmbeddedRustAnalyzer;
+
 const MAX_RESULTS: usize = 200;
+const MAX_INSPECT_RANGES: usize = 10;
+const MAX_INSPECT_SEARCHES: usize = 10;
+const MAX_INSPECT_RANGE_LINES: usize = 300;
+const MAX_INSPECT_MATCHES: usize = 100;
+const MAX_INSPECT_CONTEXT_LINES: usize = 5;
+const MAX_INSPECT_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_INSPECT_LINE_CHARS: usize = 500;
+#[cfg(feature = "legacy-lsp")]
+const MAX_LSP_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+#[cfg(feature = "legacy-lsp")]
+const MAX_PENDING_LSP_MESSAGES: usize = 128;
+#[cfg(feature = "legacy-lsp")]
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(feature = "legacy-lsp")]
 const INDEXING_TIMEOUT: Duration = Duration::from_secs(300);
+#[cfg(feature = "legacy-lsp")]
 const INDEXING_POLL_INTERVAL: Duration = Duration::from_millis(250);
+#[cfg(feature = "legacy-lsp")]
 const INDEXING_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(feature = "legacy-lsp")]
 const QUIESCENT_STABILITY_WINDOW: Duration = Duration::from_secs(1);
+#[cfg(feature = "legacy-lsp")]
 const INITIAL_QUIESCENT_STABILITY_WINDOW: Duration = Duration::from_secs(3);
+#[cfg(feature = "legacy-lsp")]
 const CHECK_TIMEOUT: Duration = Duration::from_secs(300);
+#[cfg(feature = "legacy-lsp")]
 const CHECK_START_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(feature = "legacy-lsp")]
 const CHECK_SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(feature = "legacy-lsp")]
 const FLYCHECK_PROGRESS_TOKEN_PREFIX: &str = "rust-analyzer/flycheck/";
 
 /// Sends MCP progress while a tool waits for rust-analyzer's workspace index.
@@ -67,6 +93,7 @@ impl McpProgressReporter {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(feature = "legacy-lsp")]
 struct RustAnalyzerStatus {
     health: String,
     quiescent: bool,
@@ -74,11 +101,13 @@ struct RustAnalyzerStatus {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "legacy-lsp")]
 struct LspServerError {
     method: String,
     details: String,
 }
 
+#[cfg(feature = "legacy-lsp")]
 impl std::fmt::Display for LspServerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -89,15 +118,65 @@ impl std::fmt::Display for LspServerError {
     }
 }
 
+#[cfg(feature = "legacy-lsp")]
 impl std::error::Error for LspServerError {}
 
 #[derive(Clone)]
 pub struct RustAnalyzerBridge {
     project_root: Arc<std::sync::RwLock<PathBuf>>,
     config: aimer_hot_reload::config::RustAnalyzerConfig,
-    session: Arc<Mutex<Option<LspSession>>>,
+    session: Arc<Mutex<Option<EmbeddedRustAnalyzer>>>,
     actions: Arc<Mutex<HashMap<String, Value>>>,
     previews: Arc<Mutex<HashMap<String, EditPreview>>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InspectFileRange {
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct InspectFilePattern {
+    pub pattern: String,
+    pub regex: bool,
+    pub case_sensitive: bool,
+    pub context_before: usize,
+    pub context_after: usize,
+}
+
+/// A project file operation requested by the preview_edit MCP tool.
+#[derive(Clone, Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum SourceFileChange {
+    /// Replace exact text anchors in an existing file. Each anchor must occur once.
+    Edit {
+        /// Project-relative file path.
+        file: String,
+        /// Exact old and new text pairs, all matched against the original file.
+        replacements: Vec<TextReplacement>,
+    },
+    /// Create a new file in an existing project directory.
+    Create {
+        /// Project-relative file path that does not already exist.
+        file: String,
+        /// Complete UTF-8 file contents.
+        content: String,
+    },
+    /// Delete an existing project file.
+    Delete {
+        /// Project-relative file path.
+        file: String,
+    },
+}
+
+/// One exact text replacement inside a source edit.
+#[derive(Clone, Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct TextReplacement {
+    /// Non-empty exact text that must occur once in the original file.
+    pub old_text: String,
+    /// Replacement text. An empty value removes the matched text.
+    pub new_text: String,
 }
 
 impl RustAnalyzerBridge {
@@ -127,7 +206,7 @@ impl RustAnalyzerBridge {
         self.config.allow_network
     }
 
-    /// Start or reuse rust-analyzer and wait until workspace indexing is ready.
+    /// Load or reuse the embedded Rust analysis engine for the selected workspace.
     pub async fn start(
         &self,
         requested_project_path: Option<&Path>,
@@ -152,7 +231,7 @@ impl RustAnalyzerBridge {
 
         let root_changed = requested_root != current_root;
         if root_changed {
-            // Dropping the prior session terminates its owned rust-analyzer process.
+            // Dropping the prior session releases its embedded analysis database and helper.
             *session = None;
             *self
                 .project_root
@@ -161,53 +240,27 @@ impl RustAnalyzerBridge {
             self.actions.lock().await.clear();
             self.previews.lock().await.clear();
         }
-        let mut started = session.is_none();
-        let analyzer_exited = session
+        let stale_workspace = session
             .as_mut()
-            .map(|analyzer| {
-                analyzer
-                    .child
-                    .try_wait()
-                    .context("checking existing rust-analyzer process")
-                    .map(|status| status.is_some())
-            })
+            .map(EmbeddedRustAnalyzer::poll_file_events)
             .transpose()?
             .unwrap_or(false);
-        if analyzer_exited {
+        if stale_workspace {
             *session = None;
-            started = true;
         }
+        let started = session.is_none();
         self.ensure_session_started(&mut session, progress).await?;
-        self.wait_session_until_ready(&mut session, progress)
-            .await?;
-
-        let child_status = session
-            .as_mut()
-            .expect("session initialized")
-            .child
-            .try_wait()
-            .context("checking rust-analyzer process after startup")?;
-        if let Some(status) = child_status {
-            *session = None;
-            bail!("rust-analyzer exited after workspace indexing: {status}");
-        }
-
         let analyzer = session.as_ref().expect("session initialized");
-        let health = analyzer
-            .server_status
-            .as_ref()
-            .map_or("unknown", |status| status.health.as_str());
-        let message = analyzer
-            .server_status
-            .as_ref()
-            .and_then(|status| status.message.clone());
         Ok(json!({
             "status": "ready",
             "started": started,
-            "workspace_ready": analyzer.workspace_ready,
-            "health": health,
-            "message": message,
-            "process_id": analyzer.child.id(),
+            "workspace_ready": true,
+            "health": "ok",
+            "message": Value::Null,
+            "engine": "embedded",
+            "proc_macro_server": analyzer.proc_macro_server().map(|path| path.display().to_string()),
+            "proc_macro_enabled": analyzer.proc_macro_server().is_some(),
+            "process_id": std::process::id(),
             "project_root": requested_root.display().to_string()
         }))
     }
@@ -219,18 +272,19 @@ impl RustAnalyzerBridge {
         progress: &McpProgressReporter,
     ) -> anyhow::Result<Value> {
         let mut session = self.session.lock().await;
-        self.ensure_session_started(&mut session, progress).await?;
-        self.wait_session_until_ready(&mut session, progress)
-            .await?;
-        let analyzer = session.as_mut().expect("session initialized");
-        let result = analyzer.request(method, params, Some(progress)).await;
-        if result
-            .as_ref()
-            .is_err_and(|error| error.downcast_ref::<LspServerError>().is_none())
+        if session
+            .as_mut()
+            .map(EmbeddedRustAnalyzer::poll_file_events)
+            .transpose()?
+            .unwrap_or(false)
         {
             *session = None;
         }
-        result
+        self.ensure_session_started(&mut session, progress).await?;
+        session
+            .as_ref()
+            .expect("embedded engine initialized")
+            .request(method, &params)
     }
 
     pub async fn sync_document(
@@ -244,15 +298,27 @@ impl RustAnalyzerBridge {
             .with_context(|| format!("reading Rust source '{}' ", absolute.display()))?;
         let uri = path_to_uri(&absolute)?;
         let mut session = self.session.lock().await;
-        self.ensure_session_started(&mut session, progress).await?;
-        let analyzer = session.as_mut().expect("session initialized");
-        let result = analyzer.sync_document(&uri, &contents).await;
-        if result.is_err() {
+        if session
+            .as_mut()
+            .map(EmbeddedRustAnalyzer::poll_file_events)
+            .transpose()?
+            .unwrap_or(false)
+        {
             *session = None;
         }
-        result?;
-        self.wait_session_until_ready(&mut session, progress)
-            .await?;
+        self.ensure_session_started(&mut session, progress).await?;
+        let update = session
+            .as_mut()
+            .expect("embedded engine initialized")
+            .update_document(&absolute, &contents);
+        if update.is_err() {
+            *session = None;
+            self.ensure_session_started(&mut session, progress).await?;
+            session
+                .as_mut()
+                .expect("embedded engine initialized")
+                .update_document(&absolute, &contents)?;
+        }
         Ok((uri, contents))
     }
 
@@ -265,56 +331,22 @@ impl RustAnalyzerBridge {
             self.sync_document(file, progress).await?;
         }
         let mut session = self.session.lock().await;
-        self.ensure_session_started(&mut session, progress).await?;
-        self.wait_session_until_ready(&mut session, progress)
-            .await?;
-        let session = session.as_mut().expect("session initialized");
-        let uri_filter = file
-            .map(|file| self.resolve_project_file(file, false))
-            .transpose()?
-            .map(|path| path_to_uri(&path))
-            .transpose()?;
-        let project_root = self
-            .project_root()
-            .canonicalize()
-            .context("resolving selected Rust project root")?;
-        Ok(session.diagnostics_json(&project_root, uri_filter.as_deref()))
-    }
-
-    pub async fn run_check(
-        &self,
-        file: Option<&Path>,
-        progress: &McpProgressReporter,
-    ) -> anyhow::Result<Value> {
-        let document_uri = if let Some(file) = file {
-            Some(self.sync_document(file, progress).await?.0)
-        } else {
-            None
-        };
-        let mut session = self.session.lock().await;
-        self.ensure_session_started(&mut session, progress).await?;
-        self.wait_session_until_ready(&mut session, progress)
-            .await?;
-        let result = session
+        if session
             .as_mut()
-            .expect("session initialized")
-            .run_flycheck(document_uri.as_deref())
-            .await;
-        if let Err(error) = result {
-            let analyzer_exited = session
-                .as_mut()
-                .and_then(|analyzer| analyzer.child.try_wait().ok().flatten())
-                .is_some();
-            if analyzer_exited {
-                *session = None;
-            }
-            return Err(error).context("running rust-analyzer Clippy flycheck");
+            .map(EmbeddedRustAnalyzer::poll_file_events)
+            .transpose()?
+            .unwrap_or(false)
+        {
+            *session = None;
         }
-        let session = session.as_mut().expect("session initialized");
-        let project_root = self.project_root();
-        Ok(flycheck_result_json(
-            session.diagnostics_json(&project_root, None),
-        ))
+        self.ensure_session_started(&mut session, progress).await?;
+        let filter = file
+            .map(|file| self.resolve_project_file(file, false))
+            .transpose()?;
+        session
+            .as_ref()
+            .expect("embedded engine initialized")
+            .diagnostics(filter.as_deref())
     }
 
     pub async fn get_code_actions(
@@ -324,36 +356,17 @@ impl RustAnalyzerBridge {
         progress: &McpProgressReporter,
     ) -> anyhow::Result<Value> {
         let (uri, _) = self.sync_document(file, progress).await?;
-        let mut session_guard = self.session.lock().await;
-        self.ensure_session_started(&mut session_guard, progress)
+        let result = self
+            .request(
+                "textDocument/codeAction",
+                json!({
+                    "textDocument": { "uri": uri },
+                    "range": range,
+                    "context": { "diagnostics": [] }
+                }),
+                progress,
+            )
             .await?;
-        self.wait_session_until_ready(&mut session_guard, progress)
-            .await?;
-        let result = {
-            let session = session_guard.as_mut().expect("session initialized");
-            let diagnostics = session.diagnostics.get(&uri).cloned().unwrap_or_default();
-            session
-                .request(
-                    "textDocument/codeAction",
-                    json!({
-                        "textDocument": { "uri": uri },
-                        "range": range,
-                        "context": { "diagnostics": diagnostics }
-                    }),
-                    Some(progress),
-                )
-                .await
-        };
-        let result = match result {
-            Ok(result) => result,
-            Err(error) => {
-                if error.downcast_ref::<LspServerError>().is_none() {
-                    *session_guard = None;
-                }
-                return Err(error);
-            }
-        };
-        drop(session_guard);
         let actions = result.as_array().cloned().unwrap_or_default();
         let mut action_store = self.actions.lock().await;
         action_store.clear();
@@ -428,26 +441,129 @@ impl RustAnalyzerBridge {
         range: Option<Value>,
         progress: &McpProgressReporter,
     ) -> anyhow::Result<Value> {
-        let (uri, _) = self.sync_document(file, progress).await?;
-        let (method, params) = match range {
-            Some(range) => (
-                "textDocument/rangeFormatting",
-                json!({
-                    "textDocument": { "uri": uri },
-                    "range": range,
-                    "options": { "tabSize": 4, "insertSpaces": true }
-                }),
-            ),
-            None => (
-                "textDocument/formatting",
-                json!({
-                    "textDocument": { "uri": uri },
-                    "options": { "tabSize": 4, "insertSpaces": true }
-                }),
-            ),
+        let (uri, source) = self.sync_document(file, progress).await?;
+        let absolute = self.resolve_project_file(file, false)?;
+        let project_root = self.project_root();
+        let rustfmt_config = absolute.ancestors().find_map(|directory| {
+            ["rustfmt.toml", ".rustfmt.toml"]
+                .into_iter()
+                .map(|name| directory.join(name))
+                .find(|path| path.is_file())
+        });
+        let is_range_formatting = range.is_some();
+        let mut command = if is_range_formatting {
+            let mut command = Command::new("rustup");
+            command.args(["run", "nightly", "rustfmt"]);
+            command
+        } else {
+            Command::new("rustfmt")
         };
-        let edits = self.request(method, params, progress).await?;
-        let edit = json!({ "changes": { uri: edits } });
+        command
+            .args([
+                "--edition",
+                &self.project_edition(&absolute),
+                "--emit",
+                "stdout",
+            ])
+            .current_dir(&project_root)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        if let Some(config_path) = rustfmt_config {
+            command.arg("--config-path").arg(config_path);
+        }
+        let temporary_input = if let Some(range) = range {
+            let start_line = range
+                .get("start")
+                .and_then(|position| position.get("line"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let end_position = range.get("end").unwrap_or(&Value::Null);
+            let end_line = end_position
+                .get("line")
+                .and_then(Value::as_u64)
+                .unwrap_or(start_line);
+            let end_column = end_position
+                .get("character")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let first_line = start_line + 1;
+            // LSP ends are exclusive; rustfmt's file-line ranges are inclusive.
+            let last_line = if end_line > start_line && end_column == 0 {
+                end_line
+            } else {
+                end_line + 1
+            }
+            .max(first_line);
+            let temporary_input = tempfile::NamedTempFile::new()
+                .context("creating a temporary Rust formatting input")?;
+            std::fs::write(temporary_input.path(), source.as_bytes())
+                .context("writing the temporary Rust formatting input")?;
+            let file_lines =
+                json!([{ "file": temporary_input.path(), "range": [first_line, last_line] }]);
+            command.args([
+                "--unstable-features",
+                "--skip-children",
+                "--file-lines",
+                &file_lines.to_string(),
+            ]);
+            command.arg(temporary_input.path());
+            Some(temporary_input)
+        } else {
+            command.stdin(Stdio::piped());
+            None
+        };
+        let mut child = command.spawn().context(if is_range_formatting {
+            "starting Nightly rustfmt for range formatting"
+        } else {
+            "starting rustfmt"
+        })?;
+        if temporary_input.is_none() {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(source.as_bytes())
+                    .await
+                    .context("sending Rust source to rustfmt")?;
+            }
+        }
+        let output = timeout(Duration::from_secs(30), child.wait_with_output())
+            .await
+            .context("rustfmt exceeded the 30 second timeout")?
+            .context("waiting for rustfmt")?;
+        if !output.status.success() {
+            let details = String::from_utf8_lossy(&output.stderr);
+            bail!("rustfmt failed: {}", details.trim());
+        }
+        let formatted =
+            String::from_utf8(output.stdout).context("rustfmt returned non-UTF-8 output")?;
+        let formatted = if let Some(temporary_input) = temporary_input.as_ref() {
+            let (header, formatted_source) = formatted
+                .split_once('\n')
+                .ok_or_else(|| anyhow!("rustfmt output did not include its file header"))?;
+            let reported_path = header
+                .trim_end_matches('\r')
+                .strip_suffix(':')
+                .ok_or_else(|| anyhow!("rustfmt output did not include its file header"))?;
+            anyhow::ensure!(
+                Path::new(reported_path).file_name() == temporary_input.path().file_name(),
+                "rustfmt returned output for a different file"
+            );
+            formatted_source
+                .strip_prefix("\r\n")
+                .or_else(|| formatted_source.strip_prefix('\n'))
+                .unwrap_or(formatted_source)
+                .to_owned()
+        } else {
+            formatted
+        };
+        drop(temporary_input);
+        let edit = json!({ "changes": { uri: [{
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": source_end_position(&source)
+            },
+            "newText": formatted
+        }] } });
         self.create_preview(edit).await
     }
 
@@ -458,7 +574,7 @@ impl RustAnalyzerBridge {
                 .get(preview_id)
                 .ok_or_else(|| anyhow!("unknown, expired, or already applied edit preview"))?;
             if !existing.applicable {
-                bail!("edit preview cannot be applied because manifest validation failed");
+                bail!("edit preview cannot be applied because its validation failed");
             }
             previews
                 .remove(preview_id)
@@ -468,23 +584,40 @@ impl RustAnalyzerBridge {
             bail!("edit preview expired; prepare a new preview before applying");
         }
         for file in &preview.files {
-            let current = tokio::fs::read(&file.path)
-                .await
-                .with_context(|| format!("reading '{}' before applying edit", file.relative))?;
-            if current != file.before {
-                bail!("edit preview is stale because '{}' changed", file.relative);
+            let current_path = self.resolve_project_file(&file.path, true)?;
+            if current_path != file.path {
+                bail!(
+                    "edit preview is stale because '{}' now resolves to a different path",
+                    file.relative
+                );
+            }
+            match &file.before {
+                Some(before) => {
+                    let current = tokio::fs::read(&file.path).await.with_context(|| {
+                        format!("reading '{}' before applying edit", file.relative)
+                    })?;
+                    if &current != before {
+                        bail!("edit preview is stale because '{}' changed", file.relative);
+                    }
+                }
+                None => {
+                    if path_entry_exists(&file.path).await? {
+                        bail!(
+                            "edit preview is stale because '{}' now exists",
+                            file.relative
+                        );
+                    }
+                }
             }
         }
 
         let mut applied: Vec<&PreviewFile> = Vec::new();
         for file in &preview.files {
-            let result = replace_file_atomically(&file.path, &file.after).await;
+            let result = apply_preview_file(file).await;
             if let Err(error) = result {
                 let mut rollback_errors = Vec::new();
                 for previous in applied.iter().rev() {
-                    if let Err(rollback_error) =
-                        replace_file_atomically(&previous.path, &previous.before).await
-                    {
+                    if let Err(rollback_error) = restore_preview_file(previous).await {
                         rollback_errors.push(format!("{}: {rollback_error}", previous.relative));
                     }
                 }
@@ -507,38 +640,61 @@ impl RustAnalyzerBridge {
                 .file_name()
                 .is_some_and(|name| name == "Cargo.toml")
         });
+        let requires_workspace_reload = preview.files.iter().any(|file| {
+            file.path.file_name().is_some_and(|name| name == "build.rs")
+                || (file
+                    .path
+                    .extension()
+                    .is_some_and(|extension| extension == "rs")
+                    && (file.before.is_none() || file.after.is_none()))
+        });
         let mut workspace_reload = None;
-        if let Some(session) = self.session.lock().await.as_mut() {
+        let mut session = self.session.lock().await;
+        if contains_manifest || requires_workspace_reload {
+            *session = None;
+            workspace_reload =
+                Some("embedded workspace will reload on the next Rust request".to_owned());
+        } else if let Some(engine) = session.as_mut() {
             for file in &preview.files {
                 if file
                     .path
                     .extension()
-                    .is_none_or(|extension| extension != "rs")
+                    .is_some_and(|extension| extension == "rs")
                 {
-                    continue;
+                    if let Some(after) = file.after.as_deref()
+                        && let Ok(source) = std::str::from_utf8(after)
+                    {
+                        if engine.update_document(&file.path, source).is_err() {
+                            *session = None;
+                            workspace_reload = Some(
+                                "embedded workspace will reload on the next Rust request"
+                                    .to_owned(),
+                            );
+                            break;
+                        }
+                    }
                 }
-                if let Ok(uri) = path_to_uri(&file.path) {
-                    let _ = session
-                        .sync_document(&uri, std::str::from_utf8(&file.after).unwrap_or_default())
-                        .await;
-                }
-            }
-            if contains_manifest {
-                workspace_reload = Some(
-                    session
-                        .request("rust-analyzer/reloadWorkspace", Value::Null, None)
-                        .await
-                        .map(|_| "requested".to_owned())
-                        .unwrap_or_else(|error| format!("failed: {error:#}")),
-                );
             }
         }
         let mut result = json!({
             "applied": true,
             "files": preview.files.iter().map(|file| file.relative.clone()).collect::<Vec<_>>()
         });
+        result["file_changes"] = json!(
+            preview
+                .files
+                .iter()
+                .map(|file| json!({
+                    "file": file.relative,
+                    "action": preview_file_action(file)
+                }))
+                .collect::<Vec<_>>()
+        );
         if let Some(validation) = &preview.manifest_validation {
             result["manifest_validation"] = validation.clone();
+        }
+        if let Some(validation) = &preview.source_validation {
+            result["source_validation"] = validation.clone();
         }
         if let Some(reload) = workspace_reload {
             result["workspace_reload"] = json!(reload);
@@ -551,49 +707,247 @@ impl RustAnalyzerBridge {
 
     async fn ensure_session_started(
         &self,
-        session: &mut Option<LspSession>,
+        session: &mut Option<EmbeddedRustAnalyzer>,
         progress: &McpProgressReporter,
     ) -> anyhow::Result<()> {
         if session.is_none() {
             progress
-                .report(
-                    "Starting rust-analyzer; this tool will wait for workspace indexing to finish.",
-                )
+                .report("Loading the embedded rust-analyzer engine; this tool waits for workspace loading to finish.")
                 .await;
-            *session = Some(
-                LspSession::start(&self.project_root(), &self.config, progress)
-                    .await
-                    .context("starting rust-analyzer")?,
-            );
+            let root = self.project_root();
+            let config = self.config.clone();
+            let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+            let task = tokio::task::spawn_blocking(move || {
+                EmbeddedRustAnalyzer::load(root, &config, &|message| {
+                    let _ = sender.send(message);
+                })
+            });
+            tokio::pin!(task);
+            loop {
+                tokio::select! {
+                    result = &mut task => {
+                        while let Ok(message) = receiver.try_recv() {
+                            progress.report(message).await;
+                        }
+                        *session = Some(result.context("embedded Rust analysis task failed")?.context("loading embedded rust-analyzer")?);
+                        break;
+                    }
+                    message = receiver.recv() => if let Some(message) = message {
+                        progress.report(message).await;
+                    },
+                }
+            }
         }
         Ok(())
-    }
-
-    async fn wait_session_until_ready(
-        &self,
-        session: &mut Option<LspSession>,
-        progress: &McpProgressReporter,
-    ) -> anyhow::Result<()> {
-        let result = session
-            .as_mut()
-            .expect("session initialized")
-            .wait_until_ready(progress)
-            .await;
-        if result.is_err()
-            && session
-                .as_mut()
-                .and_then(|analyzer| analyzer.child.try_wait().ok().flatten())
-                .is_some()
-        {
-            *session = None;
-        }
-        result
     }
 
     async fn create_preview(&self, workspace_edit: Value) -> anyhow::Result<Value> {
         let project_root = self.project_root();
         let files = workspace_edit_files(&project_root, &workspace_edit).await?;
         self.finish_preview(files, None).await
+    }
+
+    /// Prepare exact, project-confined text edits and file operations for review.
+    pub async fn prepare_source_edit_preview(
+        &self,
+        changes: Vec<SourceFileChange>,
+    ) -> anyhow::Result<Value> {
+        const MAX_FILES: usize = 20;
+        const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
+        const MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
+
+        anyhow::ensure!(!changes.is_empty(), "provide at least one file change");
+        anyhow::ensure!(
+            changes.len() <= MAX_FILES,
+            "a preview can contain at most {MAX_FILES} file changes"
+        );
+        let project_root = self
+            .project_root()
+            .canonicalize()
+            .context("resolving selected Rust project root")?;
+        let mut files = Vec::with_capacity(changes.len());
+        let mut seen_paths = Vec::with_capacity(changes.len());
+        let mut batch_bytes = 0usize;
+        let mut replacement_bytes = 0usize;
+
+        for change in changes {
+            let (relative_input, operation) = match change {
+                SourceFileChange::Edit { file, replacements } => {
+                    (file, SourceEdit::Edit(replacements))
+                }
+                SourceFileChange::Create { file, content } => (file, SourceEdit::Create(content)),
+                SourceFileChange::Delete { file } => (file, SourceEdit::Delete),
+            };
+            let relative_path = Path::new(&relative_input);
+            anyhow::ensure!(
+                !relative_path.is_absolute(),
+                "file paths must be project-relative"
+            );
+            anyhow::ensure!(
+                !relative_path
+                    .file_name()
+                    .is_some_and(|name| name == "Cargo.toml"),
+                "use preview_manifest_edit for Cargo.toml changes so Cargo validation runs"
+            );
+            let allow_missing = matches!(&operation, SourceEdit::Create(_));
+            let path = self.resolve_project_file(relative_path, allow_missing)?;
+            anyhow::ensure!(
+                !path.file_name().is_some_and(|name| name == "Cargo.toml"),
+                "use preview_manifest_edit for Cargo.toml changes so Cargo validation runs"
+            );
+            anyhow::ensure!(
+                !seen_paths.contains(&path),
+                "each file can appear only once in a preview"
+            );
+            seen_paths.push(path.clone());
+            let before_permissions = if allow_missing {
+                anyhow::ensure!(
+                    !path_entry_exists(&path).await?,
+                    "cannot create '{}': it already exists",
+                    relative_input
+                );
+                None
+            } else {
+                let metadata = tokio::fs::metadata(&path).await.with_context(|| {
+                    format!("reading project file '{}' for preview", relative_input)
+                })?;
+                anyhow::ensure!(
+                    metadata.is_file(),
+                    "'{}' is not a regular file",
+                    relative_input
+                );
+                anyhow::ensure!(
+                    metadata.len() <= MAX_FILE_BYTES as u64,
+                    "'{}' exceeds the 2 MiB preview limit",
+                    relative_input
+                );
+                Some(metadata.permissions())
+            };
+
+            let (before, after) = match operation {
+                SourceEdit::Edit(replacements) => {
+                    anyhow::ensure!(
+                        !replacements.is_empty() && replacements.len() <= 100,
+                        "an edit must contain 1 to 100 text replacements"
+                    );
+                    for replacement in &replacements {
+                        replacement_bytes = replacement_bytes
+                            .saturating_add(replacement.old_text.len())
+                            .saturating_add(replacement.new_text.len());
+                        anyhow::ensure!(
+                            replacement_bytes <= MAX_BATCH_BYTES,
+                            "edit anchors and replacements cannot exceed 8 MiB"
+                        );
+                    }
+                    let before = tokio::fs::read(&path)
+                        .await
+                        .with_context(|| format!("reading '{}' for preview", relative_input))?;
+                    let source = String::from_utf8(before.clone())
+                        .with_context(|| format!("'{}' is not UTF-8 text", relative_input))?;
+                    let mut indexed = Vec::with_capacity(replacements.len());
+                    for replacement in replacements {
+                        anyhow::ensure!(
+                            !replacement.old_text.is_empty(),
+                            "old_text must not be empty in '{}'",
+                            relative_input
+                        );
+                        let start = source.find(&replacement.old_text).ok_or_else(|| {
+                            anyhow!("old_text was not found in '{}'", relative_input)
+                        })?;
+                        let next_character = source[start..]
+                            .chars()
+                            .next()
+                            .expect("a non-empty old_text matched a source character")
+                            .len_utf8();
+                        anyhow::ensure!(
+                            !source[start + next_character..].contains(&replacement.old_text),
+                            "old_text must match exactly once in '{}'",
+                            relative_input
+                        );
+                        anyhow::ensure!(
+                            replacement.old_text != replacement.new_text,
+                            "old_text and new_text are identical in '{}'",
+                            relative_input
+                        );
+                        indexed.push((
+                            start,
+                            start + replacement.old_text.len(),
+                            replacement.new_text,
+                        ));
+                    }
+                    indexed.sort_by_key(|(start, end, _)| (*start, *end));
+                    anyhow::ensure!(
+                        indexed.windows(2).all(|pair| pair[0].1 <= pair[1].0),
+                        "text replacements overlap in '{}'",
+                        relative_input
+                    );
+                    let mut after = source;
+                    for (start, end, replacement) in indexed.into_iter().rev() {
+                        after.replace_range(start..end, &replacement);
+                    }
+                    (Some(before), Some(after.into_bytes()))
+                }
+                SourceEdit::Create(content) => (None, Some(content.into_bytes())),
+                SourceEdit::Delete => {
+                    let before = tokio::fs::read(&path)
+                        .await
+                        .with_context(|| format!("reading '{}' for preview", relative_input))?;
+                    (Some(before), None)
+                }
+            };
+            let before_size = before.as_ref().map_or(0, Vec::len);
+            let after_size = after.as_ref().map_or(0, Vec::len);
+            anyhow::ensure!(
+                before_size <= MAX_FILE_BYTES && after_size <= MAX_FILE_BYTES,
+                "'{}' exceeds the 2 MiB preview limit",
+                relative_input
+            );
+            batch_bytes = batch_bytes.saturating_add(before_size.max(after_size));
+            anyhow::ensure!(
+                batch_bytes <= MAX_BATCH_BYTES,
+                "a preview cannot exceed 8 MiB of changed file contents"
+            );
+
+            let relative = path
+                .strip_prefix(&project_root)
+                .context("edit path is outside the selected Rust project")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let (_, diff_truncated) = unified_diff_with_flag(
+                before.as_deref().unwrap_or_default(),
+                after.as_deref().unwrap_or_default(),
+            );
+            files.push(PreviewFile {
+                path,
+                relative,
+                before,
+                after,
+                before_permissions,
+                diff_truncated,
+            });
+        }
+        files.sort_by(|left, right| left.relative.cmp(&right.relative));
+
+        let source_validation = json!({
+            "rust_files": files.iter().filter_map(|file| {
+                if !file.path.extension().is_some_and(|extension| extension == "rs") {
+                    return None;
+                }
+                let Some(after) = file.after.as_deref() else {
+                    return Some(json!({ "file": file.relative, "status": "deleted" }));
+                };
+                let status = match std::str::from_utf8(after) {
+                    Ok(source) => match syn::parse_file(source) {
+                        Ok(_) => json!({ "file": file.relative, "status": "valid" }),
+                        Err(error) => json!({ "file": file.relative, "status": "syntax_error", "message": error.to_string() }),
+                    },
+                    Err(_) => json!({ "file": file.relative, "status": "invalid_utf8" }),
+                };
+                Some(status)
+            }).collect::<Vec<_>>()
+        });
+        self.finish_preview_with_source_validation(files, source_validation)
+            .await
     }
 
     /// Create a stale-safe preview for a manifest candidate not produced by rust-analyzer.
@@ -621,6 +975,7 @@ impl RustAnalyzerBridge {
             current == before,
             "manifest changed while Cargo validation was running; prepare a fresh preview"
         );
+        let before_permissions = tokio::fs::metadata(&path).await?.permissions();
         let relative = path
             .strip_prefix(&project_root)
             .context("manifest is outside the selected Rust project")?
@@ -630,8 +985,9 @@ impl RustAnalyzerBridge {
         let file = PreviewFile {
             path,
             relative,
-            before: before.to_vec(),
-            after: after.to_vec(),
+            before: Some(before.to_vec()),
+            after: Some(after.to_vec()),
+            before_permissions: Some(before_permissions),
             diff_truncated,
         };
         self.finish_preview_with_validation(vec![file], validation, applicable)
@@ -658,7 +1014,7 @@ impl RustAnalyzerBridge {
         files: Vec<PreviewFile>,
         macro_reference_candidates: Option<MacroReferenceReport>,
     ) -> anyhow::Result<Value> {
-        self.finish_preview_inner(files, macro_reference_candidates, None, true)
+        self.finish_preview_inner(files, macro_reference_candidates, None, true, None)
             .await
     }
 
@@ -668,7 +1024,16 @@ impl RustAnalyzerBridge {
         validation: Value,
         applicable: bool,
     ) -> anyhow::Result<Value> {
-        self.finish_preview_inner(files, None, Some(validation), applicable)
+        self.finish_preview_inner(files, None, Some(validation), applicable, None)
+            .await
+    }
+
+    async fn finish_preview_with_source_validation(
+        &self,
+        files: Vec<PreviewFile>,
+        validation: Value,
+    ) -> anyhow::Result<Value> {
+        self.finish_preview_inner(files, None, None, true, Some(validation))
             .await
     }
 
@@ -678,6 +1043,7 @@ impl RustAnalyzerBridge {
         macro_reference_candidates: Option<MacroReferenceReport>,
         manifest_validation: Option<Value>,
         applicable: bool,
+        source_validation: Option<Value>,
     ) -> anyhow::Result<Value> {
         if files.is_empty() {
             let mut result = json!({ "changed": false, "files": [] });
@@ -688,6 +1054,9 @@ impl RustAnalyzerBridge {
                 result["manifest_validation"] = validation.clone();
                 result["applicable"] = json!(applicable);
             }
+            if let Some(validation) = &source_validation {
+                result["source_validation"] = validation.clone();
+            }
             return Ok(result);
         }
         let preview_id = Uuid::new_v4().to_string();
@@ -696,7 +1065,11 @@ impl RustAnalyzerBridge {
             .map(|file| {
                 json!({
                     "file": file.relative,
-                    "diff": unified_diff(&file.before, &file.after),
+                    "action": preview_file_action(file),
+                    "diff": unified_diff(
+                        file.before.as_deref().unwrap_or_default(),
+                        file.after.as_deref().unwrap_or_default()
+                    ),
                     "truncated": file.diff_truncated
                 })
             })
@@ -714,6 +1087,7 @@ impl RustAnalyzerBridge {
                 files,
                 macro_reference_candidates: macro_reference_candidates.clone(),
                 manifest_validation: manifest_validation.clone(),
+                source_validation: source_validation.clone(),
                 applicable,
                 created_at: Instant::now(),
             },
@@ -725,6 +1099,9 @@ impl RustAnalyzerBridge {
         if let Some(validation) = &manifest_validation {
             result["manifest_validation"] = validation.clone();
             result["applicable"] = json!(applicable);
+        }
+        if let Some(validation) = &source_validation {
+            result["source_validation"] = validation.clone();
         }
         Ok(result)
     }
@@ -759,6 +1136,41 @@ impl RustAnalyzerBridge {
             bail!("file path must stay inside the selected project");
         }
         Ok(resolved)
+    }
+
+    fn project_edition(&self, file: &Path) -> String {
+        let root = self.project_root();
+        let mut directory = file.parent();
+        while let Some(current) = directory {
+            if !current.starts_with(&root) {
+                break;
+            }
+            let manifest = current.join("Cargo.toml");
+            if let Ok(contents) = std::fs::read_to_string(manifest)
+                && let Ok(value) = contents.parse::<toml::Value>()
+            {
+                if let Some(edition) = value
+                    .get("package")
+                    .and_then(|package| package.get("edition"))
+                    .and_then(toml::Value::as_str)
+                {
+                    return edition.to_owned();
+                }
+                if let Some(edition) = value
+                    .get("workspace")
+                    .and_then(|workspace| workspace.get("package"))
+                    .and_then(|package| package.get("edition"))
+                    .and_then(toml::Value::as_str)
+                {
+                    return edition.to_owned();
+                }
+            }
+            if current == root {
+                break;
+            }
+            directory = current.parent();
+        }
+        "2015".to_owned()
     }
 }
 
@@ -873,6 +1285,229 @@ pub async fn search_text(
     Ok(json!({ "query": query, "results": results, "truncated": truncated }))
 }
 
+/// Read selected 1-based line ranges and search one project file in a single
+/// bounded response. Search patterns are evaluated once per source line.
+pub async fn inspect_file(
+    root: &Path,
+    file: &str,
+    ranges: &[InspectFileRange],
+    searches: &[InspectFilePattern],
+) -> anyhow::Result<Value> {
+    if file.trim().is_empty() {
+        bail!("file must not be empty");
+    }
+    if ranges.len() > MAX_INSPECT_RANGES {
+        bail!("ranges must contain at most {MAX_INSPECT_RANGES} items");
+    }
+    if searches.len() > MAX_INSPECT_SEARCHES {
+        bail!("searches must contain at most {MAX_INSPECT_SEARCHES} items");
+    }
+    if ranges.is_empty() && searches.is_empty() {
+        bail!("provide at least one line range or search pattern");
+    }
+
+    let mut requested_range_lines = 0usize;
+    for range in ranges {
+        if range.start_line == 0 || range.end_line < range.start_line {
+            bail!(
+                "invalid line range {}..={}",
+                range.start_line,
+                range.end_line
+            );
+        }
+        let range_line_count = range
+            .end_line
+            .checked_sub(range.start_line)
+            .and_then(|count| count.checked_add(1))
+            .context("line range is too large")? as usize;
+        requested_range_lines = requested_range_lines
+            .checked_add(range_line_count)
+            .context("requested line ranges are too large")?;
+        if requested_range_lines > MAX_INSPECT_RANGE_LINES {
+            bail!("requested ranges may include at most {MAX_INSPECT_RANGE_LINES} lines");
+        }
+    }
+
+    let mut compiled_searches = Vec::with_capacity(searches.len());
+    for search in searches {
+        if search.pattern.trim().is_empty() {
+            bail!("search pattern must not be empty");
+        }
+        if search.pattern.len() > 512 {
+            bail!("search pattern must be at most 512 bytes");
+        }
+        if search.context_before > MAX_INSPECT_CONTEXT_LINES
+            || search.context_after > MAX_INSPECT_CONTEXT_LINES
+        {
+            bail!("search context must be between 0 and {MAX_INSPECT_CONTEXT_LINES} lines");
+        }
+        let expression = if search.regex {
+            search.pattern.clone()
+        } else {
+            regex::escape(&search.pattern)
+        };
+        let compiled = RegexBuilder::new(&expression)
+            .case_insensitive(!search.case_sensitive)
+            .build()
+            .with_context(|| format!("invalid regex pattern '{}'", search.pattern))?;
+        compiled_searches.push(compiled);
+    }
+
+    let workspace_root = root
+        .canonicalize()
+        .with_context(|| format!("resolving selected Rust workspace '{}'", root.display()))?;
+    let requested_file = Path::new(file);
+    if requested_file.is_absolute() {
+        bail!("file must be project-relative");
+    }
+    let resolved_file = workspace_root
+        .join(requested_file)
+        .canonicalize()
+        .with_context(|| format!("resolving project file '{file}'"))?;
+    if !resolved_file.starts_with(&workspace_root) {
+        bail!("file resolves outside the selected Rust project");
+    }
+    let metadata = tokio::fs::metadata(&resolved_file)
+        .await
+        .with_context(|| format!("reading file metadata for '{file}'"))?;
+    if !metadata.is_file() {
+        bail!("'{file}' is not a regular file");
+    }
+    if metadata.len() > MAX_INSPECT_FILE_BYTES {
+        bail!("file is larger than the {MAX_INSPECT_FILE_BYTES}-byte inspection limit");
+    }
+    let contents = tokio::fs::read_to_string(&resolved_file)
+        .await
+        .with_context(|| format!("reading UTF-8 text from '{file}'"))?;
+    let lines = contents.lines().collect::<Vec<_>>();
+
+    let mut range_results = Vec::with_capacity(ranges.len());
+    let mut any_line_truncated = false;
+    let mut truncated_lines = BTreeSet::new();
+    for range in ranges {
+        let start_index = (range.start_line as usize - 1).min(lines.len());
+        let end_index = (range.end_line as usize).min(lines.len()).max(start_index);
+        let mut range_lines = Vec::with_capacity(end_index.saturating_sub(start_index));
+        for line_index in start_index..end_index {
+            let (line, truncated) = bounded_inspect_text(lines[line_index]);
+            if truncated {
+                any_line_truncated = true;
+                truncated_lines.insert(line_index + 1);
+            }
+            range_lines.push(line);
+        }
+        range_results.push(json!({
+            "start_line": range.start_line,
+            "text": range_lines.join("\n")
+        }));
+    }
+
+    let mut total_matches = 0usize;
+    let mut any_search_truncated = false;
+    let mut search_results = Vec::with_capacity(searches.len());
+    for (search, expression) in searches.iter().zip(compiled_searches.iter()) {
+        let mut matches = Vec::new();
+        let mut search_truncated = false;
+        for (line_index, line) in lines.iter().enumerate() {
+            let Some(found) = expression.find(line) else {
+                continue;
+            };
+            if total_matches >= MAX_INSPECT_MATCHES {
+                search_truncated = true;
+                any_search_truncated = true;
+                break;
+            }
+            total_matches += 1;
+            let (match_text, text_truncated) = bounded_inspect_text(line);
+            if text_truncated {
+                any_line_truncated = true;
+                truncated_lines.insert(line_index + 1);
+            }
+            let column = line[..found.start()].chars().count() + 1;
+            let before_start = line_index.saturating_sub(search.context_before);
+            let after_end = line_index
+                .saturating_add(1)
+                .saturating_add(search.context_after)
+                .min(lines.len());
+            let context_before = (before_start..line_index)
+                .map(|context_index| {
+                    let (text, truncated) = bounded_inspect_text(lines[context_index]);
+                    if truncated {
+                        any_line_truncated = true;
+                        truncated_lines.insert(context_index + 1);
+                    }
+                    text
+                })
+                .collect::<Vec<_>>();
+            let context_after = (line_index + 1..after_end)
+                .map(|context_index| {
+                    let (text, truncated) = bounded_inspect_text(lines[context_index]);
+                    if truncated {
+                        any_line_truncated = true;
+                        truncated_lines.insert(context_index + 1);
+                    }
+                    text
+                })
+                .collect::<Vec<_>>();
+            let mut match_result = json!({
+                "line": line_index + 1,
+                "column": column,
+                "text": match_text
+            });
+            if !context_before.is_empty() {
+                match_result["context_before"] = json!(context_before.join("\n"));
+            }
+            if !context_after.is_empty() {
+                match_result["context_after"] = json!(context_after.join("\n"));
+            }
+            matches.push(match_result);
+        }
+        let mut search_result = json!({
+            "pattern": search.pattern,
+            "matches": matches
+        });
+        if search.regex {
+            search_result["regex"] = json!(true);
+        }
+        if !search.case_sensitive {
+            search_result["case_sensitive"] = json!(false);
+        }
+        if search_truncated {
+            search_result["truncated"] = json!(true);
+        }
+        search_results.push(search_result);
+    }
+
+    let relative_file = resolved_file
+        .strip_prefix(&workspace_root)
+        .context("resolved file is outside the selected workspace")?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let mut result = json!({ "file": relative_file });
+    if !range_results.is_empty() {
+        result["ranges"] = json!(range_results);
+    }
+    if !search_results.is_empty() {
+        result["searches"] = json!(search_results);
+    }
+    if any_line_truncated || any_search_truncated {
+        result["truncated"] = json!(true);
+    }
+    if !truncated_lines.is_empty() {
+        result["truncated_lines"] = json!(truncated_lines);
+    }
+    Ok(result)
+}
+
+fn bounded_inspect_text(line: &str) -> (String, bool) {
+    let mut chars = line.chars();
+    let text = chars
+        .by_ref()
+        .take(MAX_INSPECT_LINE_CHARS)
+        .collect::<String>();
+    (text, chars.next().is_some())
+}
+
 fn path_glob_matches(pattern: Option<&str>, root: &Path, path: &Path) -> Option<bool> {
     let pattern = pattern?;
     let relative = path
@@ -966,9 +1601,25 @@ fn collect_search_files(
 struct PreviewFile {
     path: PathBuf,
     relative: String,
-    before: Vec<u8>,
-    after: Vec<u8>,
+    before: Option<Vec<u8>>,
+    after: Option<Vec<u8>>,
+    before_permissions: Option<std::fs::Permissions>,
     diff_truncated: bool,
+}
+
+enum SourceEdit {
+    Edit(Vec<TextReplacement>),
+    Create(String),
+    Delete,
+}
+
+fn preview_file_action(file: &PreviewFile) -> &'static str {
+    match (&file.before, &file.after) {
+        (None, Some(_)) => "create",
+        (Some(_), None) => "delete",
+        (Some(_), Some(_)) => "edit",
+        (None, None) => "unchanged",
+    }
 }
 
 #[derive(Debug)]
@@ -976,6 +1627,7 @@ struct EditPreview {
     files: Vec<PreviewFile>,
     macro_reference_candidates: Option<MacroReferenceReport>,
     manifest_validation: Option<Value>,
+    source_validation: Option<Value>,
     applicable: bool,
     created_at: Instant,
 }
@@ -999,6 +1651,7 @@ struct MacroReferenceCandidate {
     text: String,
 }
 
+#[cfg(feature = "legacy-lsp")]
 struct LspSession {
     child: Child,
     stdin: ChildStdin,
@@ -1010,6 +1663,7 @@ struct LspSession {
     workspace_ready: bool,
 }
 
+#[cfg(feature = "legacy-lsp")]
 fn rust_analyzer_configuration() -> Value {
     json!({
         "checkOnSave": false,
@@ -1022,6 +1676,7 @@ fn rust_analyzer_configuration() -> Value {
     })
 }
 
+#[cfg(feature = "legacy-lsp")]
 impl LspSession {
     async fn start(
         project_root: &Path,
@@ -1552,6 +2207,7 @@ impl LspSession {
     }
 }
 
+#[cfg(feature = "legacy-lsp")]
 async fn read_lsp_message(stdout: &mut BufReader<ChildStdout>) -> anyhow::Result<Value> {
     let mut content_length = None;
     loop {
@@ -1587,6 +2243,7 @@ async fn read_lsp_message(stdout: &mut BufReader<ChildStdout>) -> anyhow::Result
     serde_json::from_slice(&body).context("decoding rust-analyzer LSP message")
 }
 
+#[cfg(feature = "legacy-lsp")]
 fn progress_event(message: &Value) -> Option<(String, String)> {
     if message.get("method")?.as_str()? != "$/progress" {
         return None;
@@ -1601,6 +2258,7 @@ fn progress_event(message: &Value) -> Option<(String, String)> {
     Some((token, kind))
 }
 
+#[cfg(feature = "legacy-lsp")]
 fn format_status(status: &RustAnalyzerStatus) -> String {
     format!(
         "health={}, quiescent={}, message={}",
@@ -1610,6 +2268,7 @@ fn format_status(status: &RustAnalyzerStatus) -> String {
     )
 }
 
+#[cfg(feature = "legacy-lsp")]
 fn status_progress_message(status: &RustAnalyzerStatus) -> String {
     let detail = status.message.as_deref().unwrap_or("no additional status");
     if status.quiescent {
@@ -1765,6 +2424,7 @@ fn symbol_kind_name(kind: u64) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn flycheck_result_json(mut diagnostics: Value) -> Value {
     let items = diagnostics
         .get("diagnostics")
@@ -1846,6 +2506,15 @@ fn position_from_source(source: &str, line: u32, column: u32) -> anyhow::Result<
         bail!("column is outside the source line");
     }
     Ok(json!({ "line": line - 1, "character": requested_units }))
+}
+
+fn source_end_position(source: &str) -> Value {
+    let last_line = source.rsplit('\n').next().unwrap_or_default();
+    let last_line = last_line.strip_suffix('\r').unwrap_or(last_line);
+    json!({
+        "line": source.bytes().filter(|byte| *byte == b'\n').count(),
+        "character": last_line.encode_utf16().count()
+    })
 }
 
 fn source_offset(source: &str, position: &Value) -> anyhow::Result<usize> {
@@ -1950,7 +2619,11 @@ async fn find_unedited_macro_references(
     };
     let edited_sources = preview_files
         .iter()
-        .map(|file| (file.path.clone(), file.after.as_slice()))
+        .filter_map(|file| {
+            file.after
+                .as_deref()
+                .map(|after| (file.path.clone(), after))
+        })
         .collect::<HashMap<_, _>>();
     let mut directories = vec![root.clone()];
     let mut source_files = Vec::new();
@@ -2234,8 +2907,9 @@ async fn workspace_edit_files(root: &Path, edit: &Value) -> anyhow::Result<Vec<P
         files.push(PreviewFile {
             path: canonical,
             relative,
-            before,
-            after,
+            before: Some(before),
+            after: Some(after),
+            before_permissions: Some(tokio::fs::metadata(&path).await?.permissions()),
             diff_truncated,
         });
     }
@@ -2309,6 +2983,85 @@ async fn replace_file_atomically(path: &Path, bytes: &[u8]) -> anyhow::Result<()
     }
     let _ = tokio::fs::remove_file(&backup).await;
     Ok(())
+}
+
+async fn create_file_atomically(
+    path: &Path,
+    bytes: &[u8],
+    permissions: Option<&std::fs::Permissions>,
+) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("file has no parent directory"))?;
+    let temporary = parent.join(format!(".aimer-edit-{}.tmp", Uuid::new_v4()));
+    tokio::fs::write(&temporary, bytes)
+        .await
+        .context("writing a temporary file for the edit")?;
+    if let Some(permissions) = permissions {
+        if let Err(error) = tokio::fs::set_permissions(&temporary, permissions.clone()).await {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(error).context("restoring file permissions during edit rollback");
+        }
+    }
+    if let Err(error) = tokio::fs::hard_link(&temporary, path).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(error).context("creating file atomically (target may already exist)");
+    }
+    let _ = tokio::fs::remove_file(&temporary).await;
+    Ok(())
+}
+
+async fn delete_file_atomically(path: &Path) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("file has no parent directory"))?;
+    let backup = parent.join(format!(".aimer-edit-{}.bak", Uuid::new_v4()));
+    tokio::fs::rename(path, &backup)
+        .await
+        .context("moving the file aside for atomic deletion")?;
+    if let Err(error) = tokio::fs::remove_file(&backup).await {
+        if let Err(restore_error) = tokio::fs::rename(&backup, path).await {
+            return Err(error).context(format!(
+                "could not remove the deletion backup and could not restore it: {restore_error}"
+            ));
+        }
+        return Err(error).context("could not remove the deletion backup; original file restored");
+    }
+    Ok(())
+}
+
+async fn apply_preview_file(file: &PreviewFile) -> anyhow::Result<()> {
+    match (&file.before, &file.after) {
+        (Some(_), Some(after)) => replace_file_atomically(&file.path, after).await,
+        (None, Some(after)) => create_file_atomically(&file.path, after, None).await,
+        (Some(_), None) => delete_file_atomically(&file.path).await,
+        (None, None) => bail!("edit preview contains an empty file operation"),
+    }
+}
+
+async fn path_entry_exists(path: &Path) -> anyhow::Result<bool> {
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn restore_preview_file(file: &PreviewFile) -> anyhow::Result<()> {
+    match &file.before {
+        Some(before) => {
+            if tokio::fs::try_exists(&file.path).await? {
+                replace_file_atomically(&file.path, before).await
+            } else {
+                create_file_atomically(&file.path, before, file.before_permissions.as_ref()).await
+            }
+        }
+        None => match tokio::fs::remove_file(&file.path).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -2454,8 +3207,8 @@ mod tests {
         });
         let preview = workspace_edit_files(temporary.path(), &edit).await.unwrap();
         assert_eq!(preview.len(), 1);
-        assert_eq!(preview[0].before, b"fn old() {}\n");
-        assert_eq!(preview[0].after, b"fn new() {}\n");
+        assert_eq!(preview[0].before.as_deref(), Some(&b"fn old() {}\n"[..]));
+        assert_eq!(preview[0].after.as_deref(), Some(&b"fn new() {}\n"[..]));
         assert_eq!(fs::read(&file).unwrap(), b"fn old() {}\n");
     }
 

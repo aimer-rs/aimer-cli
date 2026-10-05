@@ -1,0 +1,25 @@
+[package]
+name = "aimer-ra-proc-macro-srv"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+build = "build.rs"
+
+[[bin]]
+name = "rust-analyzer-proc-macro-srv"
+path = "src/main.rs"
+
+[dependencies]
+clap = "4.6.7"
+# Keep this aligned with Aimer's workspace lock: rustc_lexer requires a
+# matching Unicode version from unicode-properties.
+unicode-ident = "=1.0.24"
+ra_ap_proc_macro_api = { package = "proc-macro-api", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_proc_macro_srv_cli = { package = "proc-macro-srv-cli", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", features = ["in-rust-tree"] }
+
+[patch."https://github.com/Cottons29/aimer-rust-analyzer"]
+proc-macro-srv = { path = "../../vendor/aimer-rust-analyzer-proc-macro-srv" }
+
+[workspace]
+resolver = "3"

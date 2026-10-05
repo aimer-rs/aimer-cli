@@ -18,6 +18,7 @@ use super::run::cargo_message::{CargoMessage, DiagnosticLevel};
 
 const CARGO_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_TOOL_OUTPUT_BYTES: usize = 32 * 1024;
+const MAX_CLIPPY_DIAGNOSTICS: usize = 200;
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_MANIFEST_OPERATIONS: usize = 50;
 const MAX_METADATA_ITEMS: usize = 200;
@@ -44,7 +45,7 @@ pub struct CargoRunArguments {
     /// Require Cargo.lock to remain current. Defaults to Cargo's normal behavior.
     #[serde(default)]
     pub locked: bool,
-    /// Optional Cargo test name filter. Used by `aimer_rust_cargo_test` only.
+    /// Optional Cargo test name filter. Used by `cargo_test` only.
     #[serde(default)]
     pub test_filter: Option<String>,
 }
@@ -270,31 +271,36 @@ pub async fn run_cargo(
             }
         }
     };
-    let (status, exit_code, stdout, stderr, warnings_filtered) = match output_result {
-        Ok(Ok(output)) => {
-            let (stdout, stderr, warnings_filtered) =
-                normalize_cargo_output(&output.stdout, &output.stderr);
-            (
-                if output.status.success() {
-                    "passed"
-                } else {
-                    "failed"
-                },
-                output.status.code(),
-                bounded_text(&stdout),
-                bounded_text(&stderr),
-                warnings_filtered,
-            )
-        }
-        Ok(Err(error)) => return Err(error).context(format!("starting {command_label}")),
-        Err(_) => (
-            "timed_out",
-            None,
-            (String::new(), false),
-            (String::new(), false),
-            0,
-        ),
-    };
+    let (status, exit_code, stdout, stderr, warnings_filtered, cargo_progress_lines_filtered) =
+        match output_result {
+            Ok(Ok(output)) => {
+                let (filtered_stderr, cargo_progress_lines_filtered) =
+                    filter_cargo_progress_lines(&output.stderr);
+                let (stdout, stderr, warnings_filtered) =
+                    normalize_cargo_output(&output.stdout, filtered_stderr.as_bytes());
+                (
+                    if output.status.success() {
+                        "passed"
+                    } else {
+                        "failed"
+                    },
+                    output.status.code(),
+                    bounded_text(&stdout),
+                    bounded_text(&stderr),
+                    warnings_filtered,
+                    cargo_progress_lines_filtered,
+                )
+            }
+            Ok(Err(error)) => return Err(error).context(format!("starting {command_label}")),
+            Err(_) => (
+                "timed_out",
+                None,
+                (String::new(), false),
+                (String::new(), false),
+                0,
+                0,
+            ),
+        };
     let lockfile_changed = if let Some(path) = lockfile {
         let lock_after = tokio::fs::read(path).await.ok();
         lock_before != lock_after
@@ -311,6 +317,195 @@ pub async fn run_cargo(
         "stderr": stderr.0,
         "stderr_truncated": stderr.1,
         "warnings_filtered": warnings_filtered,
+        "cargo_progress_lines_filtered": cargo_progress_lines_filtered,
+        "lockfile_changed": lockfile_changed,
+        "timeout_seconds": CARGO_TIMEOUT.as_secs()
+    }))
+}
+
+/// Run Clippy directly through Cargo so the result includes Cargo's real exit
+/// status. Every lint warning is promoted to an error by `-D warnings`.
+pub async fn run_clippy(
+    root: &Path,
+    allow_network: bool,
+    file_filter: Option<&Path>,
+    progress: Option<&McpProgressReporter>,
+) -> anyhow::Result<Value> {
+    let root = root
+        .canonicalize()
+        .context("resolving Rust workspace root")?;
+    let file_filter = file_filter
+        .map(|file| {
+            let path = if file.is_absolute() {
+                file.to_path_buf()
+            } else {
+                root.join(file)
+            };
+            let path = path
+                .canonicalize()
+                .with_context(|| format!("resolving Rust source '{}'", path.display()))?;
+            anyhow::ensure!(
+                path.starts_with(&root),
+                "file filter must stay inside the selected Rust project"
+            );
+            Ok::<_, anyhow::Error>(path)
+        })
+        .transpose()?;
+    let lockfile = find_lockfile(&root);
+    let lock_before = match &lockfile {
+        Some(path) => tokio::fs::read(path).await.ok(),
+        None => None,
+    };
+    let mut command = Command::new("cargo");
+    command
+        .args([
+            "clippy",
+            "--workspace",
+            "--message-format=json",
+            "--",
+            "-D",
+            "warnings",
+        ])
+        .current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env(
+            "CARGO_NET_OFFLINE",
+            if allow_network { "false" } else { "true" },
+        )
+        .kill_on_drop(true);
+    if let Some(progress) = progress {
+        progress
+            .report("Running cargo clippy --workspace -- -D warnings.")
+            .await;
+    }
+    let started = Instant::now();
+    let output_future = timeout(CARGO_TIMEOUT, command.output());
+    tokio::pin!(output_future);
+    let mut progress_interval = interval(Duration::from_secs(10));
+    progress_interval.tick().await;
+    let output_result = loop {
+        tokio::select! {
+            result = &mut output_future => break result,
+            _ = progress_interval.tick() => if let Some(progress) = progress {
+                progress.report("cargo clippy is still running.").await;
+            }
+        }
+    };
+    let (status, exit_code, output) = match output_result {
+        Ok(Ok(output)) => (
+            if output.status.success() {
+                "passed"
+            } else {
+                "failed"
+            },
+            output.status.code(),
+            Some(output),
+        ),
+        Ok(Err(error)) => return Err(error).context("starting cargo clippy"),
+        Err(_) => ("timed_out", None, None),
+    };
+    let mut diagnostics = Vec::new();
+    let mut raw_stdout = String::new();
+    let mut stderr = String::new();
+    let mut cargo_progress_lines_filtered = 0;
+    if let Some(output) = output {
+        let (filtered_stderr, filtered_count) = filter_cargo_progress_lines(&output.stderr);
+        stderr = filtered_stderr;
+        cargo_progress_lines_filtered = filtered_count;
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Ok(message) = serde_json::from_str::<Value>(line) else {
+                raw_stdout.push_str(line);
+                raw_stdout.push('\n');
+                continue;
+            };
+            if message.get("reason").and_then(Value::as_str) != Some("compiler-message") {
+                continue;
+            }
+            let Some(diagnostic) = message.get("message") else {
+                continue;
+            };
+            let spans = diagnostic
+                .get("spans")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let primary = spans
+                .iter()
+                .find(|span| span.get("is_primary").and_then(Value::as_bool) == Some(true));
+            let path = primary
+                .and_then(|span| span.get("file_name"))
+                .and_then(Value::as_str);
+            let normalized_path = path.map(|path| normalize_path(&root, path));
+            if let (Some(filter), Some(path)) = (&file_filter, path) {
+                let candidate = Path::new(path);
+                let candidate = if candidate.is_absolute() {
+                    candidate.to_path_buf()
+                } else {
+                    root.join(candidate)
+                };
+                if candidate.canonicalize().ok().as_deref() != Some(filter.as_path()) {
+                    continue;
+                }
+            }
+            let severity = diagnostic
+                .get("level")
+                .and_then(Value::as_str)
+                .unwrap_or("warning");
+            let code = diagnostic.pointer("/code/code").and_then(Value::as_str);
+            diagnostics.push(json!({
+                "file": normalized_path,
+                "line": primary.and_then(|span| span.get("line_start")).cloned().unwrap_or(Value::Null),
+                "column": primary.and_then(|span| span.get("column_start")).cloned().unwrap_or(Value::Null),
+                "severity": severity,
+                "source": if code.is_some_and(|code| code.starts_with("clippy::")) { "clippy" } else { "rustc" },
+                "code": code,
+                "message": diagnostic.get("message").and_then(Value::as_str).unwrap_or_default(),
+                "rendered": diagnostic.get("rendered").and_then(Value::as_str)
+                    .map(|rendered| rendered.chars().take(3000).collect::<String>())
+            }));
+        }
+    }
+    diagnostics.sort_by(|left, right| {
+        left["file"]
+            .as_str()
+            .cmp(&right["file"].as_str())
+            .then_with(|| left["line"].as_u64().cmp(&right["line"].as_u64()))
+            .then_with(|| left["code"].as_str().cmp(&right["code"].as_str()))
+    });
+    let error_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["severity"] == "error")
+        .count();
+    let warning_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic["severity"] == "warning")
+        .count();
+    let truncated = diagnostics.len() > MAX_CLIPPY_DIAGNOSTICS;
+    diagnostics.truncate(MAX_CLIPPY_DIAGNOSTICS);
+    let lockfile_changed = if let Some(path) = lockfile {
+        tokio::fs::read(path).await.ok() != lock_before
+    } else {
+        false
+    };
+    let (stdout, stdout_truncated) = bounded_text(raw_stdout.as_bytes());
+    let (stderr, stderr_truncated) = bounded_text(stderr.as_bytes());
+    Ok(json!({
+        "operation": "cargo_clippy",
+        "command": "cargo clippy --workspace -- -D warnings",
+        "warnings_denied": true,
+        "status": status,
+        "exit_code": exit_code,
+        "duration_ms": started.elapsed().as_millis(),
+        "diagnostic_summary": { "error_count": error_count, "warning_count": warning_count },
+        "diagnostics": diagnostics,
+        "diagnostics_truncated": truncated,
+        "stdout": stdout,
+        "stdout_truncated": stdout_truncated,
+        "stderr": stderr,
+        "stderr_truncated": stderr_truncated,
+        "cargo_progress_lines_filtered": cargo_progress_lines_filtered,
         "lockfile_changed": lockfile_changed,
         "timeout_seconds": CARGO_TIMEOUT.as_secs()
     }))
@@ -387,6 +582,26 @@ fn append_diagnostic(output: &mut String, diagnostic: &str) {
     }
 }
 
+/// Remove low-signal Cargo compilation status lines from stderr while keeping
+/// diagnostics and all other command output intact.
+fn filter_cargo_progress_lines(stderr: &[u8]) -> (String, usize) {
+    let stderr = String::from_utf8_lossy(stderr);
+    let mut visible = String::new();
+    let mut filtered_count = 0;
+    for raw_line in stderr.split_inclusive('\n') {
+        let line = raw_line.trim_start().trim_end_matches(['\r', '\n']);
+        if ["Compiling ", "Checking ", "Finished "]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        {
+            filtered_count += 1;
+        } else {
+            visible.push_str(raw_line);
+        }
+    }
+    (visible, filtered_count)
+}
+
 fn validate_cargo_arguments(is_test: bool, arguments: &CargoRunArguments) -> anyhow::Result<()> {
     anyhow::ensure!(
         arguments
@@ -439,7 +654,7 @@ fn validate_cargo_arguments(is_test: bool, arguments: &CargoRunArguments) -> any
     );
     anyhow::ensure!(
         is_test || arguments.test_filter.is_none(),
-        "test_filter is only valid for aimer_rust_cargo_test"
+        "test_filter is only valid for cargo_test"
     );
     anyhow::ensure!(
         !(arguments.all_features && !arguments.features.is_empty()),

@@ -1,0 +1,22 @@
+[package]
+name = "proc-macro-srv"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT OR Apache-2.0"
+description = "Proc-macro server from Aimer's rust-analyzer fork, with current rustc bridge compatibility."
+build = "build.rs"
+
+[lib]
+doctest = false
+
+[dependencies]
+paths = { package = "paths", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+rustc-hash = { version = "2.1.1", optional = true }
+span = { package = "span", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", default-features = false, optional = true }
+intern = { package = "intern", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+stdx = { package = "stdx", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+
+[features]
+default = []
+in-rust-tree = ["dep:intern", "dep:paths", "dep:rustc-hash", "dep:span", "dep:stdx"]

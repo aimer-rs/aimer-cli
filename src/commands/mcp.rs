@@ -13,11 +13,12 @@ use uuid::Uuid;
 
 use super::mcp_cargo::{
     CargoRunArguments, ManifestEditArguments, ManifestReadArguments, prepare_manifest_edit,
-    read_manifest, read_project_metadata, run_cargo,
+    read_manifest, read_project_metadata, run_cargo, run_clippy,
 };
 use super::mcp_docs::{DocsRsClient, GetCrateDocsArguments, SearchCrateDocsArguments};
 use super::mcp_ra::{
-    McpProgressReporter, RustAnalyzerBridge, normalize_bounded, normalize_result, search_text,
+    InspectFilePattern, InspectFileRange, McpProgressReporter, RustAnalyzerBridge,
+    SourceFileChange, inspect_file, normalize_bounded, normalize_result, search_text,
 };
 use crate::resource_monitor::ResourceRecordStore;
 use crate::session::{
@@ -73,7 +74,7 @@ struct ResourceRecordingsArguments {
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 struct ResourceRecordingArguments {
-    /// Stable recording ID returned by aimer_list_resource_recordings.
+    /// Stable recording ID returned by list_resource_recordings.
     recording_id: String,
     /// Return samples starting at this zero-based offset.
     #[serde(default)]
@@ -108,6 +109,44 @@ struct RustTextSearchArguments {
     /// Maximum results (1–200; defaults to 50).
     #[serde(default)]
     limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct RustInspectFileArguments {
+    /// Project-relative file path.
+    file: String,
+    /// 1-based inclusive source ranges to return.
+    #[serde(default)]
+    ranges: Vec<RustInspectFileRangeArguments>,
+    /// Literal text or regex searches to run in the same file.
+    #[serde(default)]
+    searches: Vec<RustInspectFileSearchArguments>,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct RustInspectFileRangeArguments {
+    /// First source line, 1-based and inclusive.
+    start_line: u32,
+    /// Last source line, 1-based and inclusive.
+    end_line: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct RustInspectFileSearchArguments {
+    /// Literal text or a Rust regex pattern.
+    pattern: String,
+    /// Interpret the pattern as a regular expression.
+    #[serde(default)]
+    regex: bool,
+    /// Whether matching should be case-sensitive. Defaults to true.
+    #[serde(default)]
+    case_sensitive: Option<bool>,
+    /// Number of preceding lines to include for each match (0–5).
+    #[serde(default)]
+    context_before: Option<usize>,
+    /// Number of following lines to include for each match (0–5).
+    #[serde(default)]
+    context_after: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
@@ -197,14 +236,20 @@ struct RustRenameArguments {
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 struct RustCodeActionPreviewArguments {
-    /// Opaque action_id returned by aimer_rust_get_code_actions.
+    /// Opaque action_id returned by get_code_actions.
     action_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 struct RustApplyEditArguments {
-    /// Opaque preview_id returned by a Rust code or manifest preview tool.
+    /// Opaque preview_id returned by a Rust code, source-edit, or manifest preview tool.
     preview_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+struct RustPreviewEditArguments {
+    /// File changes to preview. Edit anchors must match exactly once in the original file.
+    changes: Vec<SourceFileChange>,
 }
 
 #[derive(Clone)]
@@ -220,73 +265,70 @@ struct AimerMcpServer {
 impl AimerMcpServer {
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_status",
+        name = "status",
         description = "Return the current Aimer run status and app process identity."
     )]
     fn status(&self) -> CallToolResult {
-        encode("aimer_status", self.request_live("status", Value::Null))
+        encode("status", self.request_live("status", Value::Null))
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_restart_project",
+        name = "restart_project",
         description = "Restart the attached Aimer project and wait for the new app run to start."
     )]
     fn restart_project(&self) -> CallToolResult {
-        encode(
-            "aimer_restart_project",
-            self.request_live("restart", Value::Null),
-        )
+        encode("restart_project", self.request_live("restart", Value::Null))
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_stop_project",
+        name = "stop_project",
         description = "Stop the attached Aimer project."
     )]
     fn stop_project(&self) -> CallToolResult {
-        encode("aimer_stop_project", self.request_live("stop", Value::Null))
+        encode("stop_project", self.request_live("stop", Value::Null))
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_get_logs",
+        name = "get_logs",
         description = "Read bounded Aimer build, app, or system logs with cursor pagination."
     )]
     fn get_logs(&self, Parameters(arguments): Parameters<LogsArguments>) -> CallToolResult {
         encode(
-            "aimer_get_logs",
+            "get_logs",
             self.request_live("logs", logs_payload(arguments)),
         )
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_clear_logs",
+        name = "clear_logs",
         description = "Clear retained Aimer logs and return the sequence boundary that was cleared."
     )]
     fn clear_logs(&self, Parameters(arguments): Parameters<LogsArguments>) -> CallToolResult {
         encode(
-            "aimer_clear_logs",
+            "clear_logs",
             self.request_live("clear_logs", logs_payload(arguments)),
         )
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_get_resource_usage",
+        name = "get_resource_usage",
         description = "Return the latest automatic CPU, memory, PID, thread, and GPU resource sample for the attached running Aimer app."
     )]
     fn get_resource_usage(&self) -> CallToolResult {
         encode(
-            "aimer_get_resource_usage",
+            "get_resource_usage",
             self.request_live("resource_usage", Value::Null),
         )
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_set_resource_monitor_interval",
+        name = "set_resource_monitor_interval",
         description = "Set the attached app's live resource sampling interval to 500–3000 ms. Omit interval_ms to restore the global Aimer configuration default (1000 ms)."
     )]
     async fn set_resource_monitor_interval(
@@ -299,14 +341,14 @@ impl AimerMcpServer {
             .map(|interval_ms| json!({ "interval_ms": interval_ms }))
             .unwrap_or_else(|| json!({}));
         encode(
-            "aimer_set_resource_monitor_interval",
+            "set_resource_monitor_interval",
             self.request_live("set_resource_interval", payload),
         )
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_record_resource_usage",
+        name = "record_resource_usage",
         description = "Record a bounded window of the attached app's resource usage. Takes duration in seconds (0.5–300) and interval in seconds (0.5–3), temporarily changes the live sampling interval, restores it afterward, and returns samples plus the run recording ID."
     )]
     async fn record_resource_usage(
@@ -314,12 +356,12 @@ impl AimerMcpServer {
         Parameters(arguments): Parameters<ResourceCaptureArguments>,
     ) -> CallToolResult {
         let result = self.capture_resource_usage(arguments).await;
-        encode("aimer_record_resource_usage", result)
+        encode("record_resource_usage", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_list_resource_recordings",
+        name = "list_resource_recordings",
         description = "List retained per-run resource recordings for the attached Aimer project, including completed runs."
     )]
     fn list_resource_recordings(
@@ -331,12 +373,12 @@ impl AimerMcpServer {
             let page = store.list(retention_days, arguments.cursor, arguments.limit)?;
             serde_json::to_value(page).context("encoding resource recording list")
         });
-        encode("aimer_list_resource_recordings", result)
+        encode("list_resource_recordings", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_get_resource_recording",
+        name = "get_resource_recording",
         description = "Read cursor-paginated timestamped samples from a retained per-run resource recording."
     )]
     fn get_resource_recording(
@@ -353,12 +395,12 @@ impl AimerMcpServer {
             )?;
             serde_json::to_value(page).context("encoding resource recording samples")
         });
-        encode("aimer_get_resource_recording", result)
+        encode("get_resource_recording", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_get_crate_docs",
+        name = "get_crate_docs",
         description = "Read docs.rs documentation for a Rust crate or item. Trait lookups also return the trait signature, all method signatures, required/provided status, and each method's documentation. Uses the attached project's Cargo.lock version by default and caches crate documentation for offline use."
     )]
     async fn get_crate_docs(
@@ -370,13 +412,13 @@ impl AimerMcpServer {
             .get_document(arguments)
             .await
             .and_then(|document| serde_json::to_value(document).context("encoding docs.rs result"));
-        encode("aimer_get_crate_docs", result)
+        encode("get_crate_docs", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_search_crate_docs",
-        description = "Search public Rust item names, paths, and documentation in a docs.rs crate. Uses the attached project's Cargo.lock version by default, returns bounded results with item paths and summaries, and shares the offline documentation cache with aimer_get_crate_docs."
+        name = "search_crate_docs",
+        description = "Search public Rust item names, paths, and documentation in a docs.rs crate. Uses the attached project's Cargo.lock version by default, returns bounded results with item paths and summaries, and shares the offline documentation cache with get_crate_docs."
     )]
     async fn search_crate_docs(
         &self,
@@ -389,12 +431,12 @@ impl AimerMcpServer {
             .and_then(|results| {
                 serde_json::to_value(results).context("encoding docs.rs search results")
             });
-        encode("aimer_search_crate_docs", result)
+        encode("search_crate_docs", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_search_symbols",
+        name = "search_symbols",
         description = "Fuzzy-search Rust workspace symbols. Case-insensitive exact name or path matches come first, followed by fuzzy matches; each result includes match_quality. Returns bounded JSON locations."
     )]
     async fn rust_search_symbols(
@@ -460,12 +502,12 @@ impl AimerMcpServer {
             Ok(json!({ "results": results, "truncated": truncated }))
         }
         .await;
-        encode("aimer_rust_search_symbols", result)
+        encode("search_symbols", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_search_text",
+        name = "search_text",
         description = "Search project text, comments, and string literals; respects Git ignore rules when available and returns bounded JSON matches."
     )]
     async fn rust_search_text(
@@ -481,12 +523,50 @@ impl AimerMcpServer {
             arguments.limit.unwrap_or(50),
         )
         .await;
-        encode("aimer_rust_search_text", result)
+        encode("search_text", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_get_document_symbols",
+        name = "inspect_file",
+        description = "Return selected line ranges as compact text blocks plus bounded literal or regex matches with optional nearby context from one project file."
+    )]
+    async fn rust_inspect_file(
+        &self,
+        Parameters(arguments): Parameters<RustInspectFileArguments>,
+    ) -> CallToolResult {
+        let ranges = arguments
+            .ranges
+            .into_iter()
+            .map(|range| InspectFileRange {
+                start_line: range.start_line,
+                end_line: range.end_line,
+            })
+            .collect::<Vec<_>>();
+        let searches = arguments
+            .searches
+            .into_iter()
+            .map(|search| InspectFilePattern {
+                pattern: search.pattern,
+                regex: search.regex,
+                case_sensitive: search.case_sensitive.unwrap_or(true),
+                context_before: search.context_before.unwrap_or(0),
+                context_after: search.context_after.unwrap_or(0),
+            })
+            .collect::<Vec<_>>();
+        let result = inspect_file(
+            &self.rust_analyzer.project_root(),
+            &arguments.file,
+            &ranges,
+            &searches,
+        )
+        .await;
+        encode("inspect_file", result)
+    }
+
+    #[tool(
+        output_schema = mcp_result_schema(),
+        name = "get_document_symbols",
         description = "Return the nested Rust symbol outline for a project file."
     )]
     async fn rust_get_document_symbols(
@@ -514,12 +594,12 @@ impl AimerMcpServer {
             ))
         }
         .await;
-        encode("aimer_rust_get_document_symbols", result)
+        encode("get_document_symbols", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_completion",
+        name = "completion",
         description = "Return bounded Rust completion suggestions at a project-relative source position."
     )]
     async fn rust_completion(
@@ -548,12 +628,12 @@ impl AimerMcpServer {
             ))
         }
         .await;
-        encode("aimer_rust_completion", result)
+        encode("completion", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_get_code_lenses",
+        name = "get_code_lenses",
         description = "Return bounded code lenses for a Rust file, resolving their command metadata without executing commands."
     )]
     async fn rust_get_code_lenses(
@@ -593,12 +673,12 @@ impl AimerMcpServer {
             Ok(json!({ "results": results, "truncated": truncated }))
         }
         .await;
-        encode("aimer_rust_get_code_lenses", result)
+        encode("get_code_lenses", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_find_definition",
+        name = "find_definition",
         description = "Find the definition of the Rust symbol at a project-relative file position."
     )]
     async fn rust_find_definition(
@@ -613,7 +693,7 @@ impl AimerMcpServer {
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_find_declaration",
+        name = "find_declaration",
         description = "Find the declaration of the Rust symbol at a project-relative file position."
     )]
     async fn rust_find_declaration(
@@ -628,7 +708,7 @@ impl AimerMcpServer {
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_find_references",
+        name = "find_references",
         description = "Find Rust symbol references at a project-relative file position."
     )]
     async fn rust_find_references(
@@ -646,12 +726,12 @@ impl AimerMcpServer {
                 &progress,
             )
             .await;
-        encode("aimer_rust_find_references", result)
+        encode("find_references", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_find_implementations",
+        name = "find_implementations",
         description = "Find Rust implementations for the symbol at a project-relative file position."
     )]
     async fn rust_find_implementations(
@@ -666,7 +746,7 @@ impl AimerMcpServer {
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_type_definition",
+        name = "type_definition",
         description = "Find the type definition of the Rust symbol at a project-relative file position."
     )]
     async fn rust_type_definition(
@@ -681,7 +761,7 @@ impl AimerMcpServer {
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_hover",
+        name = "hover",
         description = "Return the Rust type and documentation information at a project-relative file position."
     )]
     async fn rust_hover(
@@ -696,7 +776,7 @@ impl AimerMcpServer {
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_document_highlights",
+        name = "document_highlights",
         description = "Find symbol occurrences highlighted within the current Rust document."
     )]
     async fn rust_document_highlights(
@@ -725,12 +805,12 @@ impl AimerMcpServer {
             ))
         }
         .await;
-        encode("aimer_rust_document_highlights", result)
+        encode("document_highlights", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_signature_help",
+        name = "signature_help",
         description = "Return function signature and active parameter information at a Rust source position."
     )]
     async fn rust_signature_help(
@@ -745,7 +825,7 @@ impl AimerMcpServer {
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_prepare_rename",
+        name = "prepare_rename",
         description = "Check whether the Rust symbol at a source position can be renamed and return its target range and placeholder."
     )]
     async fn rust_prepare_rename(
@@ -774,12 +854,12 @@ impl AimerMcpServer {
             ))
         }
         .await;
-        encode("aimer_rust_prepare_rename", result)
+        encode("prepare_rename", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_inlay_hints",
+        name = "inlay_hints",
         description = "Return inferred type and parameter-name hints for a Rust source range."
     )]
     async fn rust_inlay_hints(
@@ -814,12 +894,12 @@ impl AimerMcpServer {
             ))
         }
         .await;
-        encode("aimer_rust_inlay_hints", result)
+        encode("inlay_hints", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_get_diagnostics",
+        name = "get_diagnostics",
         description = "Return the latest rust-analyzer diagnostics as bounded structured JSON."
     )]
     async fn rust_get_diagnostics(
@@ -832,13 +912,13 @@ impl AimerMcpServer {
             .rust_analyzer
             .diagnostics(arguments.file.as_deref().map(Path::new), &progress)
             .await;
-        encode("aimer_rust_get_diagnostics", result)
+        encode("get_diagnostics", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_start_lsp",
-        description = "Start or reuse rust-analyzer for project_path (absolute or relative to the current Rust project). Selecting a different directory switches the workspace for later Rust tools. Omit project_path to use the current Rust project. Waits for indexing and reports progress and ready status."
+        name = "start_lsp",
+        description = "Load the embedded rust-analyzer engine for project_path (absolute or relative to the current Rust project). Selecting a different directory switches the workspace for later Rust tools. Omit project_path to use the current Rust project. Waits for workspace loading and reports progress and ready status."
     )]
     async fn rust_start_lsp(
         &self,
@@ -847,7 +927,7 @@ impl AimerMcpServer {
     ) -> CallToolResult {
         let progress = McpProgressReporter::from_context(&context);
         encode(
-            "aimer_rust_start_lsp",
+            "start_lsp",
             self.rust_analyzer
                 .start(arguments.project_path.as_deref().map(Path::new), &progress)
                 .await,
@@ -856,7 +936,7 @@ impl AimerMcpServer {
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_get_manifest",
+        name = "get_manifest",
         description = "Read a Cargo.toml as structured JSON. Omit manifest_path to read the selected Rust project's Cargo.toml."
     )]
     async fn rust_get_manifest(
@@ -864,12 +944,12 @@ impl AimerMcpServer {
         Parameters(arguments): Parameters<ManifestReadArguments>,
     ) -> CallToolResult {
         let result = read_manifest(&self.rust_analyzer.project_root(), arguments).await;
-        encode("aimer_rust_get_manifest", result)
+        encode("get_manifest", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_get_project_metadata",
+        name = "get_project_metadata",
         description = "Return bounded structured Cargo workspace, package, target, feature, dependency, and resolution metadata. Uses --locked and the configured Cargo network policy; metadata is unavailable if Cargo cannot resolve the existing lockfile."
     )]
     async fn rust_get_project_metadata(&self) -> CallToolResult {
@@ -878,13 +958,13 @@ impl AimerMcpServer {
             self.rust_analyzer.allow_network(),
         )
         .await;
-        encode("aimer_rust_get_project_metadata", result)
+        encode("get_project_metadata", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_preview_manifest_edit",
-        description = "Preview ordered set/remove operations on a Cargo.toml key path. The candidate is parsed and checked with Cargo metadata in a temporary workspace; use aimer_rust_apply_edit to apply an applicable preview."
+        name = "preview_manifest_edit",
+        description = "Preview ordered set/remove operations on a Cargo.toml key path. The candidate is parsed and checked with Cargo metadata in a temporary workspace; use apply_edit to apply an applicable preview."
     )]
     async fn rust_preview_manifest_edit(
         &self,
@@ -919,13 +999,13 @@ impl AimerMcpServer {
                 .await
         }
         .await;
-        encode("aimer_rust_preview_manifest_edit", result)
+        encode("preview_manifest_edit", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_cargo_check",
-        description = "Run cargo check for the selected workspace or package. Returns Cargo's actual exit code, bounded output, and the number of rustc warnings filtered from the output. Cargo runs offline unless the existing rust-analyzer network setting opts in."
+        name = "cargo_check",
+        description = "Run cargo check for the selected workspace or package. Returns Cargo's actual exit code and bounded output; filters and counts rustc warnings and routine Compiling/Checking/Finished progress lines. Cargo runs offline unless the existing rust-analyzer network setting opts in."
     )]
     async fn rust_cargo_check(
         &self,
@@ -941,13 +1021,13 @@ impl AimerMcpServer {
             Some(&progress),
         )
         .await;
-        encode("aimer_rust_cargo_check", result)
+        encode("cargo_check", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_cargo_test",
-        description = "Run cargo test for the selected workspace or package, optionally with a test name filter. Returns Cargo's actual exit code, bounded output, and the number of rustc warnings filtered from the output. Cargo runs offline unless the existing rust-analyzer network setting opts in."
+        name = "cargo_test",
+        description = "Run cargo test for the selected workspace or package, optionally with a test name filter. Returns Cargo's actual exit code and bounded output; filters and counts rustc warnings and routine Compiling/Checking/Finished progress lines. Cargo runs offline unless the existing rust-analyzer network setting opts in."
     )]
     async fn rust_cargo_test(
         &self,
@@ -963,13 +1043,13 @@ impl AimerMcpServer {
             Some(&progress),
         )
         .await;
-        encode("aimer_rust_cargo_test", result)
+        encode("cargo_test", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_check",
-        description = "Run rust-analyzer's Clippy flycheck with all warnings denied (-D warnings). Returns a completion status, diagnostic counts, and bounded diagnostics; rust-analyzer does not expose Cargo's exit code. Requires Clippy to be installed. Timeout and runner errors include a code and phase. Cargo runs offline unless user config opts in to network access."
+        name = "check",
+        description = "Run cargo clippy --workspace -- -D warnings directly. Returns Cargo's actual exit code and bounded structured diagnostics; routine Compiling/Checking/Finished progress lines are filtered and counted. Cargo runs offline unless user config opts in to network access."
     )]
     async fn rust_check(
         &self,
@@ -977,16 +1057,19 @@ impl AimerMcpServer {
         context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         let progress = McpProgressReporter::from_context(&context);
-        let result = self
-            .rust_analyzer
-            .run_check(arguments.file.as_deref().map(Path::new), &progress)
-            .await;
-        encode("aimer_rust_check", result)
+        let result = run_clippy(
+            &self.rust_analyzer.project_root(),
+            self.rust_analyzer.allow_network(),
+            arguments.file.as_deref().map(Path::new),
+            Some(&progress),
+        )
+        .await;
+        encode("check", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_get_call_hierarchy",
+        name = "get_call_hierarchy",
         description = "Return callers or callees for the function at a project-relative file position."
     )]
     async fn rust_get_call_hierarchy(
@@ -1032,12 +1115,12 @@ impl AimerMcpServer {
             ))
         }
         .await;
-        encode("aimer_rust_get_call_hierarchy", result)
+        encode("get_call_hierarchy", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_expand_macro",
+        name = "expand_macro",
         description = "Expand the Rust macro invocation at a project-relative file position."
     )]
     async fn rust_expand_macro(
@@ -1077,12 +1160,12 @@ impl AimerMcpServer {
             Ok(expansion)
         }
         .await;
-        encode("aimer_rust_expand_macro", result)
+        encode("expand_macro", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_get_code_actions",
+        name = "get_code_actions",
         description = "List code actions available for a project-relative source range."
     )]
     async fn rust_get_code_actions(
@@ -1108,13 +1191,13 @@ impl AimerMcpServer {
                 .await
         }
         .await;
-        encode("aimer_rust_get_code_actions", result)
+        encode("get_code_actions", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_rename_symbol",
-        description = "Prepare a semantic symbol rename and return a preview. Possible unedited identifiers in macro_rules! bodies are listed separately and are never added automatically; apply the preview with aimer_rust_apply_edit."
+        name = "rename_symbol",
+        description = "Prepare a semantic symbol rename and return a preview. Possible unedited identifiers in macro_rules! bodies are listed separately and are never added automatically; apply the preview with apply_edit."
     )]
     async fn rust_rename_symbol(
         &self,
@@ -1132,13 +1215,13 @@ impl AimerMcpServer {
                 &progress,
             )
             .await;
-        encode("aimer_rust_rename_symbol", result)
+        encode("rename_symbol", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_preview_code_action",
-        description = "Resolve a code action and return a preview; apply it with aimer_rust_apply_edit."
+        name = "preview_code_action",
+        description = "Resolve a code action and return a preview; apply it with apply_edit."
     )]
     async fn rust_preview_code_action(
         &self,
@@ -1150,13 +1233,29 @@ impl AimerMcpServer {
             .rust_analyzer
             .prepare_code_action(&arguments.action_id, &progress)
             .await;
-        encode("aimer_rust_preview_code_action", result)
+        encode("preview_code_action", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_format",
-        description = "Format a Rust file or range and return a preview; apply it with aimer_rust_apply_edit."
+        name = "preview_edit",
+        description = "Preview exact text edits and file create/delete operations in the selected Rust project. Edit anchors must match exactly once; the tool returns bounded diffs and a preview_id. Apply a reviewed preview with apply_edit."
+    )]
+    async fn rust_preview_edit(
+        &self,
+        Parameters(arguments): Parameters<RustPreviewEditArguments>,
+    ) -> CallToolResult {
+        let result = self
+            .rust_analyzer
+            .prepare_source_edit_preview(arguments.changes)
+            .await;
+        encode("preview_edit", result)
+    }
+
+    #[tool(
+        output_schema = mcp_result_schema(),
+        name = "format",
+        description = "Format a Rust file or range and return a preview; apply it with apply_edit."
     )]
     async fn rust_format(
         &self,
@@ -1185,13 +1284,13 @@ impl AimerMcpServer {
                 .await
         }
         .await;
-        encode("aimer_rust_format", result)
+        encode("format", result)
     }
 
     #[tool(
         output_schema = mcp_result_schema(),
-        name = "aimer_rust_apply_edit",
-        description = "Apply a previously reviewed Rust source or Cargo.toml preview if its source files are unchanged and manifest validation allows it."
+        name = "apply_edit",
+        description = "Apply a previously reviewed Rust code, source-edit, or Cargo.toml preview if its source files are unchanged and any required manifest validation passed."
     )]
     async fn rust_apply_edit(
         &self,
@@ -1201,7 +1300,7 @@ impl AimerMcpServer {
             .rust_analyzer
             .apply_preview(&arguments.preview_id)
             .await;
-        encode("aimer_rust_apply_edit", result)
+        encode("apply_edit", result)
     }
 }
 
@@ -1395,16 +1494,14 @@ fn encode(operation: &str, result: anyhow::Result<Value>) -> CallToolResult {
         Err(error) => {
             let message = format!("{error:#}");
             let lower_message = message.to_ascii_lowercase();
-            let (code, phase) = if operation == "aimer_rust_check"
+            let (code, phase) = if operation == "check"
                 && (lower_message.contains("check_start_timeout")
                     || lower_message.contains("did not start flycheck"))
             {
                 ("check_start_timeout", "start")
-            } else if operation == "aimer_rust_check"
-                && lower_message.contains("check_runner_unavailable")
-            {
+            } else if operation == "check" && lower_message.contains("check_runner_unavailable") {
                 ("check_runner_unavailable", "runner")
-            } else if operation == "aimer_rust_check"
+            } else if operation == "check"
                 && (lower_message.contains("check_timeout")
                     || lower_message.contains("flycheck timed out")
                     || lower_message.contains("timed out waiting for rust-analyzer"))
@@ -1934,7 +2031,7 @@ mod tests {
     #[test]
     fn encode_returns_structured_content_and_actionable_check_errors() {
         let success = encode(
-            "aimer_rust_search_symbols",
+            "search_symbols",
             Ok(json!({ "results": [], "truncated": false })),
         );
         assert_eq!(
@@ -1944,7 +2041,7 @@ mod tests {
         assert_eq!(success.is_error, Some(false));
 
         let error = encode(
-            "aimer_rust_check",
+            "check",
             Err(anyhow!(
                 "rust-analyzer did not start flycheck within 30 seconds"
             )),
@@ -1955,7 +2052,7 @@ mod tests {
             Some(json!({
                 "error": {
                     "code": "check_start_timeout",
-                    "operation": "aimer_rust_check",
+                    "operation": "check",
                     "phase": "start",
                     "message": "rust-analyzer did not start flycheck within 30 seconds"
                 }

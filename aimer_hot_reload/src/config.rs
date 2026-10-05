@@ -22,8 +22,11 @@ struct McpConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct RustAnalyzerUserConfig {
+    /// Kept so existing config files continue to parse. The RA executable is no longer used.
     #[serde(default)]
     binary_path: Option<PathBuf>,
+    #[serde(default)]
+    proc_macro_server_path: Option<PathBuf>,
     #[serde(default)]
     allow_network: bool,
 }
@@ -31,8 +34,10 @@ struct RustAnalyzerUserConfig {
 /// User settings for the optional rust-analyzer MCP integration.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RustAnalyzerConfig {
-    /// Optional path to a rust-analyzer executable. If omitted, PATH is used.
+    /// Deprecated compatibility setting; the embedded engine does not launch this binary.
     pub binary_path: Option<PathBuf>,
+    /// Optional path to the matching rust-analyzer proc-macro helper executable.
+    pub proc_macro_server_path: Option<PathBuf>,
     /// Whether Cargo commands started by Rust MCP tools may use the network.
     pub allow_network: bool,
 }
@@ -65,6 +70,7 @@ fn rust_analyzer_config_from(contents: &str) -> Result<RustAnalyzerConfig, Strin
         .and_then(|mcp| mcp.rust_analyzer)
         .map(|settings| RustAnalyzerConfig {
             binary_path: settings.binary_path,
+            proc_macro_server_path: settings.proc_macro_server_path,
             allow_network: settings.allow_network,
         })
         .unwrap_or_default())
@@ -86,13 +92,17 @@ mod rust_analyzer_config_tests {
     #[test]
     fn rust_analyzer_config_reads_binary_override_and_network_opt_in() {
         let config = rust_analyzer_config_from(
-            "[mcp.rust_analyzer]\nbinary_path = \"/tools/rust-analyzer\"\nallow_network = true\n",
+            "[mcp.rust_analyzer]\nbinary_path = \"/tools/rust-analyzer\"\nproc_macro_server_path = \"/tools/rust-analyzer-proc-macro-srv\"\nallow_network = true\n",
         )
         .unwrap();
 
         assert_eq!(
             config.binary_path,
             Some(PathBuf::from("/tools/rust-analyzer"))
+        );
+        assert_eq!(
+            config.proc_macro_server_path,
+            Some(PathBuf::from("/tools/rust-analyzer-proc-macro-srv"))
         );
         assert!(config.allow_network);
     }

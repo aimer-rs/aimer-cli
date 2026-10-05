@@ -106,10 +106,17 @@ bundling, and release packaging across desktop, mobile, and web targets.
 
 Before using `aimer`, ensure you have a standard Rust toolchain installed:
 
-- **Rust**: Rust compiler (`rustc`) and package manager (`cargo`), version 2024 edition compatible (1.85+ recommended).
+- **Rust**: Rust compiler (`rustc`) and package manager (`cargo`), version 1.98 or newer (required by the embedded rust-analyzer engine).
 - **Rustup**: For managing cross-compilation targets.
 
 Run `aimer doctor` after installation to verify platform dependencies and receive tailored setup commands.
+
+For Rust standard-library navigation and proc-macro crate analysis, install the
+Rust source component:
+
+```bash
+rustup component add rust-src
+```
 
 ---
 
@@ -122,8 +129,20 @@ Clone the repository and install the binary into your Cargo binary directory (`~
 ```bash
 git clone https://github.com/Cottons29/aimer_cli.git
 cd aimer_cli
+rustup component add rustc-dev
 cargo install --path .
 ```
+
+The Rust MCP embeds the matching rust-analyzer IDE engine and, by default,
+bundles its matching proc-macro helper in the Aimer executable. The build
+compiles the helper with `RUSTC_BOOTSTRAP=1`; the active Rust toolchain must
+have the `rustc-dev` component installed:
+
+At startup Aimer extracts the bundled helper into a private temporary
+directory and launches it as a child process. No separate helper installation
+or `rust-analyzer` executable on `PATH` is needed. Builds made with
+`--no-default-features` can use a helper beside `aimer`, or a helper selected
+with `proc_macro_server_path`.
 
 Verify the installation:
 
@@ -465,39 +484,44 @@ aimer mcp --install claude --global
 
 Once connected, your AI assistant can execute the following tools:
 
-- `aimer_status`: Inspect the current run state, process ID, runtime, and target device.
-- `aimer_restart_project`: Trigger a clean restart and rebuild of the app, waiting for the new run.
-- `aimer_stop_project`: Stop the running project session.
-- `aimer_get_logs`: Fetch bounded build, app, or system logs with cursor pagination and source code locations.
-- `aimer_clear_logs`: Clear retained logs up to a specific sequence boundary.
-- `aimer_get_resource_usage`: Read the latest app CPU, GPU, memory, PID, and thread sample.
-- `aimer_set_resource_monitor_interval`: Set the live sample interval to 500–3000 ms; omit `interval_ms` to restore the global default.
-- `aimer_record_resource_usage`: Capture a bounded sample window with `duration` in seconds (0.5–300) and `interval` in seconds (0.5–3), then return the samples inline and the run recording ID.
-- `aimer_list_resource_recordings`: List retained per-run resource recordings, including completed app runs.
-- `aimer_get_resource_recording`: Read paginated samples from a prior run.
-- `aimer_get_crate_docs`: Read crate or item documentation from docs.rs. A trait lookup includes its rendered declaration, method signatures, required/provided status, and each method's documentation. The tool resolves an omitted version from the attached project's `Cargo.lock` and caches the crate's Rustdoc JSON index for offline lookups.
-- `aimer_search_crate_docs`: Search public item names, paths, and documentation text within a crate. Results include item paths and short documentation summaries; pass a result's path to `aimer_get_crate_docs` to read the full item documentation.
-- `aimer_rust_start_lsp`: Start or reuse rust-analyzer for `project_path`; wait for workspace indexing with progress notifications and return ready status. `project_path` may be an absolute path or a path relative to the current Rust project. Omitting it uses the current project.
-- `aimer_rust_search_symbols`, `aimer_rust_search_text`, `aimer_rust_get_document_symbols`, and `aimer_rust_completion`: Search Rust workspace symbols and project text, inspect a file's symbol outline, or get context-aware completion suggestions.
-- `aimer_rust_find_definition`, `aimer_rust_find_declaration`, `aimer_rust_type_definition`, `aimer_rust_find_references`, `aimer_rust_find_implementations`, `aimer_rust_hover`, `aimer_rust_get_call_hierarchy`, and `aimer_rust_expand_macro`: Navigate Rust code using rust-analyzer's semantic model.
-- `aimer_rust_signature_help`, `aimer_rust_document_highlights`, `aimer_rust_inlay_hints`, and `aimer_rust_get_code_lenses`: Inspect call signatures, local symbol occurrences, inferred hints, and code lenses.
-- `aimer_rust_get_diagnostics` and `aimer_rust_check`: Read current diagnostics or trigger rust-analyzer's Cargo flycheck and return structured diagnostics.
-- `aimer_rust_get_code_actions`, `aimer_rust_prepare_rename`, `aimer_rust_rename_symbol`, `aimer_rust_preview_code_action`, `aimer_rust_format`, and `aimer_rust_apply_edit`: Prepare bounded edit previews and apply a preview after review.
-- `aimer_rust_get_manifest` and `aimer_rust_get_project_metadata`: Read parsed `Cargo.toml` data or the selected workspace's bounded Cargo package and dependency metadata. Metadata uses `--locked` and does not update the project's lockfile.
-- `aimer_rust_preview_manifest_edit`: Preview ordered `set` or `remove` operations on a `Cargo.toml` key path. The tool parses the candidate and runs Cargo metadata in a temporary workspace; invalid previews cannot be applied. Apply an applicable preview with `aimer_rust_apply_edit`.
-- `aimer_rust_cargo_check` and `aimer_rust_cargo_test`: Run Cargo check or test for the selected workspace or a package and return the actual exit code with bounded stdout and stderr. Rustc warning diagnostics are filtered from the output and counted in `warnings_filtered`; other compiler diagnostics and test output remain visible. Both tools accept target and feature selection; test also accepts a test-name filter. `locked` defaults to Cargo's normal behavior, and the result reports whether `Cargo.lock` changed. Each call has a five-minute timeout.
+- `status`: Inspect the current run state, process ID, runtime, and target device.
+- `restart_project`: Trigger a clean restart and rebuild of the app, waiting for the new run.
+- `stop_project`: Stop the running project session.
+- `get_logs`: Fetch bounded build, app, or system logs with cursor pagination and source code locations.
+- `clear_logs`: Clear retained logs up to a specific sequence boundary.
+- `get_resource_usage`: Read the latest app CPU, GPU, memory, PID, and thread sample.
+- `set_resource_monitor_interval`: Set the live sample interval to 500–3000 ms; omit `interval_ms` to restore the global default.
+- `record_resource_usage`: Capture a bounded sample window with `duration` in seconds (0.5–300) and `interval` in seconds (0.5–3), then return the samples inline and the run recording ID.
+- `list_resource_recordings`: List retained per-run resource recordings, including completed app runs.
+- `get_resource_recording`: Read paginated samples from a prior run.
+- `get_crate_docs`: Read crate or item documentation from docs.rs. A trait lookup includes its rendered declaration, method signatures, required/provided status, and each method's documentation. The tool resolves an omitted version from the attached project's `Cargo.lock` and caches the crate's Rustdoc JSON index for offline lookups.
+- `search_crate_docs`: Search public item names, paths, and documentation text within a crate. Results include item paths and short documentation summaries; pass a result's path to `get_crate_docs` to read the full item documentation.
+- `start_lsp`: Load the embedded rust-analyzer engine for `project_path`; waits for workspace loading with progress notifications and returns ready status. `project_path` may be an absolute path or a path relative to the current Rust project. Omitting it uses the current project.
+- `search_symbols`, `search_text`, `inspect_file`, `get_document_symbols`, and `completion`: Search Rust workspace symbols and project text, inspect compact text blocks from bounded file ranges alongside literal or regex matches, inspect a file's symbol outline, or get context-aware completion suggestions.
+- `find_definition`, `find_declaration`, `type_definition`, `find_references`, `find_implementations`, `hover`, `get_call_hierarchy`, and `expand_macro`: Navigate Rust code using rust-analyzer's semantic model.
+- `signature_help`, `document_highlights`, `inlay_hints`, and `get_code_lenses`: Inspect call signatures, local symbol occurrences, inferred hints, and code lenses.
+- `get_diagnostics` and `check`: Read native Rust diagnostics or run `cargo clippy --workspace -- -D warnings`, returning Cargo's actual exit code and bounded diagnostics.
+- `get_code_actions`, `prepare_rename`, `rename_symbol`, `preview_code_action`, `format`, and `apply_edit`: Prepare bounded edit previews and apply a preview after review.
+- `preview_edit`: Preview project-relative exact-text edits, new files, and file deletions. Each `old_text` anchor must occur exactly once; overlapping or ambiguous edits are rejected. Rust files include a syntax parse report. Review the bounded diff, then apply its `preview_id` with `apply_edit`. Use `preview_manifest_edit` for `Cargo.toml`, which runs Cargo validation.
+- `get_manifest` and `get_project_metadata`: Read parsed `Cargo.toml` data or the selected workspace's bounded Cargo package and dependency metadata. Metadata uses `--locked` and does not update the project's lockfile.
+- `preview_manifest_edit`: Preview ordered `set` or `remove` operations on a `Cargo.toml` key path. The tool parses the candidate and runs Cargo metadata in a temporary workspace; invalid previews cannot be applied. Apply an applicable preview with `apply_edit`.
+- `cargo_check` and `cargo_test`: Run Cargo check or test for the selected workspace or a package and return the actual exit code with bounded stdout and stderr. Rustc warning diagnostics are filtered from the output and counted in `warnings_filtered`; routine `Compiling`, `Checking`, and `Finished` lines are filtered and counted in `cargo_progress_lines_filtered`. Other compiler diagnostics and test output remain visible. Both tools accept target and feature selection; test also accepts a test-name filter. `locked` defaults to Cargo's normal behavior, and the result reports whether `Cargo.lock` changed. Each call has a five-minute timeout.
 
-Rust code tools require `rust-analyzer` on `PATH`. A custom binary and Cargo network policy can be set in `~/.aimer/config.toml`:
+Rust code tools load the embedded IDE engine on the first request. A custom proc-macro helper path can override the bundled helper, and Cargo network policy can be set in `~/.aimer/config.toml`:
 
 ```toml
 [mcp.rust_analyzer]
-# Optional; defaults to finding rust-analyzer on PATH.
-binary_path = "/path/to/rust-analyzer"
+# Optional; overrides the helper bundled in Aimer.
+proc_macro_server_path = "/path/to/rust-analyzer-proc-macro-srv"
 # Defaults to false. When false, Cargo calls made by Rust MCP tools run offline.
 allow_network = false
 ```
 
-The LSP process starts lazily when a Rust tool is first called, or explicitly through `aimer_rust_start_lsp`. The start tool waits for indexing and reports progress while rust-analyzer loads. The MCP server owns the rust-analyzer process and terminates it when the Agent disconnects and the MCP stdio process exits. Rust Analyzer enables build scripts and procedural macros for more complete analysis. `aimer_rust_check` triggers rust-analyzer's Clippy flycheck rather than starting Cargo directly; `aimer_rust_cargo_check` and `aimer_rust_cargo_test` run Cargo directly and return its exit code. Code edits are returned as previews and are only written after `aimer_rust_apply_edit`; stale previews are rejected. Manifest previews preserve existing TOML comments and formatting, and applying one asks rust-analyzer to reload the workspace. The rust-analyzer network setting applies to Cargo work launched by rust-analyzer and the new Cargo tools. Existing docs.rs tools retain their separate network and cache behavior.
+The embedded engine loads lazily when a Rust tool is first called, or explicitly through `start_lsp`. It updates indexed Rust files as they change and reloads the Cargo workspace after manifest, build-script, or source-structure changes. Procedural macros run in the bundled matching helper process; Aimer extracts it to a private temporary directory for the lifetime of the MCP process. Builds made with `--no-default-features` need a helper beside `aimer` or a configured `proc_macro_server_path`. `check` runs Clippy directly with all warnings denied; `cargo_check` and `cargo_test` run their corresponding Cargo commands and return their exit codes. All three filter and count routine Cargo compilation progress lines. Code edits are returned as previews and are only written after `apply_edit`; stale previews are rejected. Manifest previews preserve existing TOML comments and formatting, and applying one schedules an embedded workspace reload on the next Rust request. Cargo commands run offline unless the network setting opts in. Existing docs.rs tools retain their separate network and cache behavior.
+
+Range formatting uses rustfmt's unstable file-range support and invokes
+`rustup run nightly rustfmt`; whole-file formatting uses the toolchain's regular
+`rustfmt`.
 
 The same docs.rs features are available directly from the CLI. It prints JSON, which makes the output easy to pipe into other tools:
 
@@ -519,7 +543,7 @@ The docs.rs cache is stored under `~/.aimer/docs/docs.rs`, with each crate versi
 
 ### Resource monitoring
 
-The TUI's Resource Monitor pane is available with `4` or `Tab`. Aimer samples the running app automatically and records each run under `~/.aimer/resource-recordings`; completed recordings are kept for 30 days by default and can be read later with the MCP tools above. The `aimer_record_resource_usage` tool temporarily applies the requested interval, waits for the duration, restores the previous interval, and returns that window's samples inline. It also returns the run recording ID for later paginated reads. The host collector uses `sysinfo` for process CPU and memory on macOS, Windows, and Linux. macOS GPU usage is collected from per-process Apple GPU records when available; Android process readings use the connected device through `adb`. iOS device process counters are unavailable to the host because of device sandboxing. Unavailable fields include a reason in the TUI and recorded data.
+The TUI's Resource Monitor pane is available with `4` or `Tab`. Aimer samples the running app automatically and records each run under `~/.aimer/resource-recordings`; completed recordings are kept for 30 days by default and can be read later with the MCP tools above. The `record_resource_usage` tool temporarily applies the requested interval, waits for the duration, restores the previous interval, and returns that window's samples inline. It also returns the run recording ID for later paginated reads. The host collector uses `sysinfo` for process CPU and memory on macOS, Windows, and Linux. macOS GPU usage is collected from per-process Apple GPU records when available; Android process readings use the connected device through `adb`. iOS device process counters are unavailable to the host because of device sandboxing. Unavailable fields include a reason in the TUI and recorded data.
 
 Resource settings live in the global `~/.aimer/config.toml`:
 

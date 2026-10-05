@@ -1,18 +1,22 @@
 [package]
 name = "aimer_cli"
-version = "0.6.4+2"
+version = "0.7.1+2"
 edition = "2024"
+rust-version = "1.98"
 resolver = "3"
 
 [features]
+default = ["bundled-proc-macro"]
+# Bundle the matching Rust Analyzer proc-macro server in the Aimer executable.
+bundled-proc-macro = []
 # Opt in to integration tests that build and execute generated hot-reload guests.
 hot-reload = []
+legacy-lsp = []
 
 
 [[bin]]
 name = "aimer"
 path = "src/main.rs"
-
 
 [lib]
 name = "aimer_cli"
@@ -25,7 +29,13 @@ aimer_hot_reload.workspace = true
 # Non-local
 
 
-ra_ap_rust-analyzer = "=0.0.356"
+ra_ap_ide = { package = "ide", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_ide_db = { package = "ide-db", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_hir = { package = "hir", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_load_cargo = { package = "load-cargo", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_project_model = { package = "project-model", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_vfs = { package = "vfs", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_proc_macro_api = { package = "proc-macro-api", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",
@@ -73,6 +83,7 @@ quote.workspace = true
 wasm-bindgen-cli-support.workspace = true
 notify.workspace = true
 proc-macro2.workspace = true
+regex.workspace = true
 
 
 [dev-dependencies]
@@ -149,3 +160,4 @@ syn = { version = "2.0.118", features = ["full", "visit", "visit-mut"] }
 quote = "1.0.47"
 wasm-bindgen-cli-support = "0.2.128"
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
+regex = "1.13.1"
