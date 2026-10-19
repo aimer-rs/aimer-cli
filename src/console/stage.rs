@@ -171,9 +171,7 @@ impl StageProgress {
         if total == 0 {
             return Some(0);
         }
-        Some(
-            ((u128::from(self.current.min(total)) * 100) / u128::from(total)) as u8,
-        )
+        Some(((u128::from(self.current.min(total)) * 100) / u128::from(total)) as u8)
     }
 }
 
@@ -410,7 +408,9 @@ impl StageBook {
         let next = if offset.is_negative() {
             current.saturating_sub(offset.unsigned_abs())
         } else {
-            current.saturating_add(offset as usize).min(self.stages.len() - 1)
+            current
+                .saturating_add(offset as usize)
+                .min(self.stages.len() - 1)
         };
         let id = self.stages[next].id;
         self.selected = Some(id);
@@ -563,7 +563,8 @@ mod tests {
         let now = Instant::now();
         let mut book = StageBook::new();
         let compile = book.start(StageKind::Compile, now);
-        book.finish(compile, now + Duration::from_millis(1)).unwrap();
+        book.finish(compile, now + Duration::from_millis(1))
+            .unwrap();
         let launch = book.start(StageKind::Launch, now + Duration::from_millis(2));
 
         book.select(compile).unwrap();

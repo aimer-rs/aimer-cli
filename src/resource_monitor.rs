@@ -649,8 +649,8 @@ fn parse_macos_ioreg_gpu_time(output: &str, pid: u32) -> Option<u64> {
                 .and_then(|value| value.parse::<u32>().ok());
             if client_pid == Some(pid) {
                 matching_client = true;
-                total_time_ns = total_time_ns
-                    .saturating_add(app_usage_time_ns.take().unwrap_or_default());
+                total_time_ns =
+                    total_time_ns.saturating_add(app_usage_time_ns.take().unwrap_or_default());
             } else {
                 app_usage_time_ns = None;
             }
@@ -669,7 +669,10 @@ fn parse_accumulated_gpu_time(app_usage: &str) -> u64 {
             break;
         };
         let digits = value.trim_start().trim_start_matches('"');
-        let digit_count = digits.bytes().take_while(|byte| byte.is_ascii_digit()).count();
+        let digit_count = digits
+            .bytes()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
         if digit_count == 0 {
             remaining = value;
             continue;

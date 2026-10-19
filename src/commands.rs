@@ -13,5 +13,7 @@ pub mod mcp_install;
 mod mcp_ra;
 mod mcp_ra_engine;
 pub mod migrate;
+mod project_selection;
 pub mod run;
+pub mod skill_install;
 pub mod version;

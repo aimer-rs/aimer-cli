@@ -13,10 +13,10 @@ use uuid::Uuid;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InstallScope {
     /// Register `aimer mcp` without binding it to a project. The running MCP
-    /// adapter discovers the nearest `Aimer.toml` from its working directory.
+    /// adapter discovers the nearest `Aimer.toml` or `Cargo.toml` from its working directory.
     Global,
     /// Register the adapter with an explicit project root (or a descendant of
-    /// one containing `Aimer.toml`).
+    /// one containing `Aimer.toml` or `Cargo.toml`).
     Project(PathBuf),
 }
 
@@ -145,13 +145,15 @@ pub(crate) fn discover_project_root(start: &Path) -> Result<PathBuf> {
     };
 
     for candidate in directory.ancestors() {
-        if candidate.join(crate::config::MANIFEST_FILE).is_file() {
+        if candidate.join(crate::config::MANIFEST_FILE).is_file()
+            || candidate.join("Cargo.toml").is_file()
+        {
             return Ok(candidate.to_path_buf());
         }
     }
 
     bail!(
-        "no {} found from '{}'; run this command from an Aimer project or pass --project",
+        "no {} or Cargo.toml found from '{}'; run this command from an Aimer or Rust project, or pass --project",
         crate::config::MANIFEST_FILE,
         start.display()
     )
@@ -357,6 +359,34 @@ mod tests {
                 TomlValue::String("mcp".to_string()),
                 TomlValue::String("--project".to_string()),
                 TomlValue::String(project.canonicalize().unwrap().display().to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn rust_project_install_persists_canonical_project_path() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("projects/rust-demo");
+        fs::create_dir_all(project.join("src")).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+
+        install_in(
+            &["claude".to_string()],
+            InstallScope::Project(project.clone()),
+            home.path(),
+            Path::new("/opt/aimer/bin/aimer"),
+        )
+        .unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(home.path().join(".claude.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            config["mcpServers"]["aimer"]["args"],
+            serde_json::json!([
+                "mcp",
+                "--project",
+                project.canonicalize().unwrap().display().to_string()
             ])
         );
     }

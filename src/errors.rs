@@ -26,10 +26,7 @@ pub enum AimerError {
 
     /// A target matched multiple connected devices and needs an explicit ID.
     #[error("multiple devices match target '{target}'; pass --device <id> ({device_ids})")]
-    AmbiguousDevices {
-        target: String,
-        device_ids: String,
-    },
+    AmbiguousDevices { target: String, device_ids: String },
 }
 
 #[cfg(test)]

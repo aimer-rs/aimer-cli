@@ -106,6 +106,31 @@ mod tests {
     }
 
     #[test]
+    fn the_scaffold_supports_continuous_ipad_resizing() {
+        let dir = scaffolded("resizable_app");
+        let info = fs::read_to_string(dir.join("builds/ios/resizable_app/Info.plist")).unwrap();
+        let project = fs::read_to_string(
+            dir.join("builds/ios/resizable_app.xcodeproj/project.pbxproj"),
+        ).unwrap();
+
+        assert!(!info.contains("<key>UIRequiresFullScreen</key>"),
+            "full-screen compatibility delays scene resizing until the drag ends");
+        assert!(!project.contains("INFOPLIST_KEY_UIRequiresFullScreen"));
+        assert!(info.contains("<key>UIApplicationSceneManifest</key>"));
+        assert!(info.contains("<key>UILaunchScreen</key>"));
+        let ipad = info.split_once("<key>UISupportedInterfaceOrientations~ipad</key>")
+            .expect("iPad must support every orientation").1
+            .split_once("</array>").expect("iPad orientation array").0;
+        for orientation in [
+            "UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown",
+            "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight",
+        ] {
+            assert!(ipad.contains(&format!("<string>{orientation}</string>")),
+                "missing iPad orientation: {orientation}");
+        }
+    }
+
+    #[test]
     fn the_scaffold_ships_the_revisioned_ios_text_bridge() {
         let dir = scaffolded("my_app");
 
@@ -126,6 +151,32 @@ mod tests {
             );
         }
         assert!(!swift.contains("private let placeholder"), "{swift}");
+    }
+
+    /// Rust finds the keyboard shims with `dlsym`, which only sees exported
+    /// symbols. A Release build compiles the app with whole-module
+    /// optimization, which gives an `internal` function hidden visibility and
+    /// leaves it out of the export trie, so the soft keyboard silently never
+    /// appears. Every `@_cdecl` the scaffold defines must therefore be `public`.
+    #[test]
+    fn the_scaffold_exports_every_cdecl_shim_to_dlsym() {
+        let dir = scaffolded("my_app");
+
+        let swift = fs::read_to_string(dir.join("builds/ios/my_app/main.swift")).unwrap();
+        let mut lines = swift.lines();
+        let mut checked = 0;
+        while let Some(line) = lines.next() {
+            if !line.starts_with("@_cdecl(") {
+                continue;
+            }
+            let declaration = lines.next().unwrap_or_default();
+            assert!(
+                declaration.starts_with("public func "),
+                "{line} must be followed by a `public func`, found: {declaration}"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 5, "expected the keyboard and frame shims, found {checked}");
     }
 
     /// A scratch project directory with the iOS scaffold in it.

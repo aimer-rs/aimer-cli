@@ -15,6 +15,16 @@ use crate::targets::Targets;
 /// appropriate compiler invocation with inherited stdio so it is friendly to
 /// CI logs.
 pub fn execute(target: Option<String>, release: bool) -> anyhow::Result<()> {
+    execute_with_package(target, release, None)
+}
+
+pub fn execute_with_package(
+    target: Option<String>,
+    release: bool,
+    package: Option<String>,
+) -> anyhow::Result<()> {
+    let project = crate::commands::project_selection::select_aimer_project(package.as_deref())?;
+    let _project_directory = project.enter()?;
     let target = resolve_target(target)?;
 
     let mut cmd = build_command(target, release)?;

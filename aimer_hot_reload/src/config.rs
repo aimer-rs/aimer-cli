@@ -445,14 +445,21 @@ impl AimerManifest {
             .unwrap_or(&[])
     }
 
-    /// Load the manifest from `<dir>/aimer.toml`. Returns `Ok(None)` when the
-    /// file does not exist, and an error only when it exists but cannot be
-    /// read or parsed.
+    /// Load `<dir>/Aimer.toml` or `<dir>/aimer.toml`. Returns `Ok(None)` when
+    /// neither file exists, and an error only when a manifest cannot be read or
+    /// parsed.
     pub fn load_from(dir: &Path) -> anyhow::Result<Option<Self>> {
-        let path = dir.join(MANIFEST_FILE);
-        if !path.exists() {
-            return Ok(None);
-        }
+        let canonical_path = dir.join(MANIFEST_FILE);
+        let path = if canonical_path.exists() {
+            canonical_path
+        } else {
+            let lowercase_path = dir.join("aimer.toml");
+            if lowercase_path.exists() {
+                lowercase_path
+            } else {
+                return Ok(None);
+            }
+        };
         let contents = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let manifest: AimerManifest =
@@ -657,6 +664,20 @@ mod tests {
         assert_eq!(loaded.package.description, "a cool app");
         assert_eq!(loaded.package.author, "alice");
         assert_eq!(loaded.package.group, "com.example.myapp");
+    }
+
+    #[test]
+    fn manifest_loads_lowercase_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("aimer.toml"),
+            "[package]\nname = \"lowercase_app\"\n",
+        )
+        .unwrap();
+
+        let loaded = AimerManifest::load_from(dir.path()).unwrap().unwrap();
+
+        assert_eq!(loaded.package.name, "lowercase_app");
     }
 
     #[test]

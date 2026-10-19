@@ -1,10 +1,10 @@
-pub mod input;
 pub mod hotkeys;
-pub mod inspector;
 pub mod inline;
+pub mod input;
+pub mod inspector;
 pub mod log_history;
-pub mod state;
 pub mod stage;
+pub mod state;
 pub mod ui;
 
 use std::fs::File;
@@ -15,23 +15,21 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use self::inspector::InspectorServer;
 use crate::commands::run::Device;
 use crate::commands::run::pipeline::{self, RunContext};
 use crate::commands::run::utilities::{LogStyling, get_project_root};
+use crate::session::{LogStream, SessionCommand, SessionHandle, SessionStatus};
 use crate::targets::Targets;
 use crate::tui::RawModeGuard;
-use crate::session::{LogStream, SessionCommand, SessionHandle, SessionStatus};
-use self::inspector::InspectorServer;
 use anyhow::Context;
 use arboard::Clipboard;
 use crossbeam::channel::Sender;
-use crossterm::event::{
-    Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind,
-};
+use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+pub use inline::start as start_inline;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 pub use state::{AppState, ConsoleType, PaneView, RunnerEvent, Selection, Status};
-pub use inline::start as start_inline;
 use tokio::runtime::Runtime;
 
 /// Spawn the per-target runner on a background thread, dispatching via the
@@ -90,15 +88,8 @@ pub(crate) fn observe_session_event(session: Option<&SessionHandle>, event: &Run
         }
         RunnerEvent::AppLog(log) => {
             let message = crate::console::state::strip_ansi(log.message());
-            let location = log
-                .source_location()
-                .map(crate::console::state::strip_ansi);
-            session.push_log(
-                LogStream::App,
-                "info",
-                message,
-                location,
-            );
+            let location = log.source_location().map(crate::console::state::strip_ansi);
+            session.push_log(LogStream::App, "info", message, location);
         }
         RunnerEvent::AppPanic(report) => {
             let message = report.lines().join("\n");
@@ -607,7 +598,7 @@ pub fn start(
                         (KeyCode::Up, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_up(1),
                             ConsoleType::App => state.app_pane.scroll_up(1),
-                            ConsoleType::ResourceMonitor => {},
+                            ConsoleType::ResourceMonitor => {}
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_sub(1);
                                 if (state.inspector_cursor as u16) < state.inspector_pane.scroll {
@@ -618,7 +609,7 @@ pub fn start(
                         (KeyCode::Down, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_down(1),
                             ConsoleType::App => state.app_pane.scroll_down(1),
-                            ConsoleType::ResourceMonitor => {},
+                            ConsoleType::ResourceMonitor => {}
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_add(1);
                             }
@@ -626,7 +617,7 @@ pub fn start(
                         (KeyCode::PageUp, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_up(10),
                             ConsoleType::App => state.app_pane.scroll_up(10),
-                            ConsoleType::ResourceMonitor => {},
+                            ConsoleType::ResourceMonitor => {}
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_sub(10);
                                 if (state.inspector_cursor as u16) < state.inspector_pane.scroll {
@@ -637,7 +628,7 @@ pub fn start(
                         (KeyCode::PageDown, _) => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_down(10),
                             ConsoleType::App => state.app_pane.scroll_down(10),
-                            ConsoleType::ResourceMonitor => {},
+                            ConsoleType::ResourceMonitor => {}
                             ConsoleType::Inspector => {
                                 state.inspector_cursor = state.inspector_cursor.saturating_add(10);
                             }
@@ -652,13 +643,13 @@ pub fn start(
                             ConsoleType::Build => state.build_pane.scroll_up(2),
                             ConsoleType::App => state.app_pane.scroll_up(2),
                             ConsoleType::Inspector => state.inspector_pane.scroll_up(2),
-                            ConsoleType::ResourceMonitor => {},
+                            ConsoleType::ResourceMonitor => {}
                         },
                         MouseEventKind::ScrollDown => match state.pane {
                             ConsoleType::Build => state.build_pane.scroll_down(2),
                             ConsoleType::App => state.app_pane.scroll_down(2),
                             ConsoleType::Inspector => state.inspector_pane.scroll_down(2),
-                            ConsoleType::ResourceMonitor => {},
+                            ConsoleType::ResourceMonitor => {}
                         },
                         // A normal click on an app log row toggles its repeated
                         // group. In selection mode, the same gesture anchors a
@@ -918,14 +909,8 @@ mod tests {
         .unwrap();
         let handle = runtime.handle();
 
-        observe_session_event(
-            Some(&handle),
-            &RunnerEvent::StatusChange(Status::Launching),
-        );
-        observe_session_event(
-            Some(&handle),
-            &RunnerEvent::StatusChange(Status::Running),
-        );
+        observe_session_event(Some(&handle), &RunnerEvent::StatusChange(Status::Launching));
+        observe_session_event(Some(&handle), &RunnerEvent::StatusChange(Status::Running));
 
         assert_eq!(handle.snapshot().status, SessionStatus::Running);
     }

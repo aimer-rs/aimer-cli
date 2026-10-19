@@ -11,12 +11,12 @@ use crate::targets::{MigrateTarget, Targets};
 
 pub mod commands;
 pub mod console;
+mod consts;
 pub mod errors;
-pub mod session;
 pub mod resource_monitor;
+pub mod session;
 pub mod targets;
 pub mod tui;
-mod consts;
 
 pub use aimer_hot_reload::config;
 
@@ -151,9 +151,9 @@ enum Commands {
         project_name: String,
     },
 
-    /// Read or search crate documentation from docs.rs
+    /// Read or search crate documentation from docs.rs or installed Rust toolchain docs
     Docs {
-        /// Cargo package name, for example `serde`
+        /// Cargo package name or toolchain crate, for example `serde` or `std`
         crate_name: String,
         /// Item path relative to the crate root, for example `de::Deserialize`
         #[arg(conflicts_with = "search")]
@@ -161,7 +161,7 @@ enum Commands {
         /// Search public item names, paths, and documentation text
         #[arg(long, conflicts_with = "item_path")]
         search: Option<String>,
-        /// Exact crate version (defaults to the version in the current project's Cargo.lock)
+        /// Exact crate version (defaults to Cargo.lock), or Rust toolchain for std/core/alloc
         #[arg(long)]
         version: Option<String>,
         /// Maximum search results to return (1–100; defaults to 20)
@@ -181,6 +181,9 @@ enum Commands {
         /// Run on the device with this id without showing the picker
         #[arg(short, long)]
         device: Option<String>,
+        /// Select an Aimer package in the Cargo workspace.
+        #[arg(short, long)]
+        package: Option<String>,
         /// Disable the interactive TUI and print logs to stdout/stderr instead.
         /// Useful when running from an IDE or CI where no terminal is
         /// available.
@@ -223,6 +226,19 @@ enum Commands {
         attach: Option<String>,
     },
 
+    /// Install Aimer's Rust workflow skill for one or more coding agents.
+    Skill {
+        /// Install the user-level skill for codex, claude, or cursor.
+        #[arg(
+            long,
+            value_name = "AGENT",
+            num_args = 1..,
+            value_delimiter = ',',
+            required = true
+        )]
+        install: Vec<String>,
+    },
+
     /// List live Aimer run sessions.
     Sessions {
         /// Restrict discovery to a project path.
@@ -238,6 +254,9 @@ enum Commands {
         /// Target to build for (defaults to aimer.toml's default_target)
         #[arg(short, long, value_enum)]
         target: Option<Targets>,
+        /// Select an Aimer package in the Cargo workspace.
+        #[arg(short, long)]
+        package: Option<String>,
         /// Build in release mode
         #[arg(short, long)]
         release: bool,
@@ -248,6 +267,9 @@ enum Commands {
         /// Target platform to bundle for (macos, android, ios, web, ...)
         #[arg(value_enum)]
         platform: Targets,
+        /// Select an Aimer package in the Cargo workspace.
+        #[arg(short, long)]
+        package: Option<String>,
         /// Assemble in release mode
         #[arg(short, long)]
         release: bool,
@@ -320,6 +342,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Run {
             target,
             device,
+            package,
             no_tui,
             release: _,
             unstable,
@@ -327,9 +350,10 @@ fn main() -> anyhow::Result<()> {
             no_mcp,
         }) => {
             let policy = execution_policy.expect("run commands always resolve an execution policy");
-            commands::run::execute(
+            commands::run::execute_with_package(
                 target.map(|t| t.to_string()),
                 device.clone(),
+                package.clone(),
                 *no_tui,
                 policy,
                 *verbose_widget_ir,
@@ -348,9 +372,7 @@ fn main() -> anyhow::Result<()> {
                     commands::mcp_install::InstallScope::Global
                 } else {
                     commands::mcp_install::InstallScope::Project(
-                        project
-                            .clone()
-                            .unwrap_or(std::env::current_dir()?),
+                        project.clone().unwrap_or(std::env::current_dir()?),
                     )
                 };
                 let reports = commands::mcp_install::install(agents, scope)?;
@@ -370,14 +392,45 @@ fn main() -> anyhow::Result<()> {
                 commands::mcp::execute(project.clone(), attach.clone())?;
             }
         }
+        Some(Commands::Skill { install }) => {
+            let reports = commands::skill_install::install(install)?;
+            for report in reports {
+                let state = if report.changed {
+                    "installed"
+                } else {
+                    "already installed"
+                };
+                println!(
+                    "Aimer Rust skill {state} for {} in {}",
+                    report.agent,
+                    report.path.display()
+                );
+            }
+        }
         Some(Commands::Sessions { project, json }) => {
             commands::mcp::list_sessions(project.clone(), *json)?;
         }
-        Some(Commands::Build { target, release }) => {
-            commands::build::execute(target.map(|t| t.to_string()), *release)?;
+        Some(Commands::Build {
+            target,
+            package,
+            release,
+        }) => {
+            commands::build::execute_with_package(
+                target.map(|t| t.to_string()),
+                *release,
+                package.clone(),
+            )?;
         }
-        Some(Commands::Assemble { platform, release }) => {
-            commands::assemble::execute(platform.to_string(), *release)?;
+        Some(Commands::Assemble {
+            platform,
+            package,
+            release,
+        }) => {
+            commands::assemble::execute_with_package(
+                platform.to_string(),
+                *release,
+                package.clone(),
+            )?;
         }
         Some(Commands::Doctor) => {
             commands::doctor::execute()?;
@@ -401,9 +454,9 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     #[cfg(debug_assertions)]
     use std::env::{current_dir, set_current_dir};
-    use clap::Parser;
 
     use crate::config::{ApplicationRuntime, BuildProfile, ReloadPolicy};
 
@@ -416,35 +469,24 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
 
         super::apply_project_dir_override(Some(project.path().as_os_str())).unwrap();
-        assert_eq!(current_dir().unwrap(), project.path().canonicalize().unwrap());
+        assert_eq!(
+            current_dir().unwrap(),
+            project.path().canonicalize().unwrap()
+        );
 
         set_current_dir(original).unwrap();
     }
 
     #[test]
     fn nightly_wasm_hot_reload_invocation_is_accepted() {
-        let cli = Cli::try_parse_from([
-            "aimer",
-            "+nightly",
-            "run",
-            "-Z",
-            "hot-reload",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "hot-reload"]).unwrap();
 
         assert!(cli.validate_unstable_invocation().is_ok());
     }
 
     #[test]
     fn nightly_inline_render_invocation_is_accepted() {
-        let cli = Cli::try_parse_from([
-            "aimer",
-            "+nightly",
-            "run",
-            "-Z",
-            "inline-render",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "inline-render"]).unwrap();
 
         assert!(cli.validate_unstable_invocation().is_ok());
         assert!(matches!(
@@ -480,6 +522,39 @@ mod tests {
     }
 
     #[test]
+    fn run_build_and_assemble_accept_a_package_selector() {
+        let run = Cli::try_parse_from(["aimer", "run", "-p", "moewmoew"]).unwrap();
+        assert!(matches!(
+            run.command,
+            Some(Commands::Run {
+                package: Some(package),
+                ..
+            }) if package == "moewmoew"
+        ));
+
+        let build =
+            Cli::try_parse_from(["aimer", "build", "--package", "moewmoew", "--target", "web"])
+                .unwrap();
+        assert!(matches!(
+            build.command,
+            Some(Commands::Build {
+                package: Some(package),
+                ..
+            }) if package == "moewmoew"
+        ));
+
+        let assemble =
+            Cli::try_parse_from(["aimer", "assemble", "android", "-p", "moewmoew"]).unwrap();
+        assert!(matches!(
+            assemble.command,
+            Some(Commands::Assemble {
+                package: Some(package),
+                ..
+            }) if package == "moewmoew"
+        ));
+    }
+
+    #[test]
     fn run_can_disable_automatic_mcp_registration() {
         let cli = Cli::try_parse_from(["aimer", "run", "--no-mcp"]).unwrap();
         assert!(matches!(
@@ -491,23 +566,15 @@ mod tests {
     #[test]
     fn mcp_project_and_exact_attach_are_mutually_exclusive() {
         assert!(
-            Cli::try_parse_from(["aimer", "mcp", "--project", ".", "--attach", "abc"])
-                .is_err()
+            Cli::try_parse_from(["aimer", "mcp", "--project", ".", "--attach", "abc"]).is_err()
         );
         assert!(Cli::try_parse_from(["aimer", "mcp", "--attach", "abc"]).is_ok());
     }
 
     #[test]
     fn mcp_global_install_accepts_multiple_agents() {
-        let cli = Cli::try_parse_from([
-            "aimer",
-            "mcp",
-            "--install",
-            "codex",
-            "claude",
-            "--global",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "claude", "--global"])
+            .unwrap();
 
         assert!(matches!(
             cli.command,
@@ -527,12 +594,19 @@ mod tests {
     #[test]
     fn mcp_install_rejects_global_project_and_exact_attach_combinations() {
         assert!(
-            Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "--global", "--project", "."])
-                .is_err()
+            Cli::try_parse_from([
+                "aimer",
+                "mcp",
+                "--install",
+                "codex",
+                "--global",
+                "--project",
+                "."
+            ])
+            .is_err()
         );
         assert!(
-            Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "--attach", "abc"])
-                .is_err()
+            Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "--attach", "abc"]).is_err()
         );
     }
 
@@ -584,16 +658,7 @@ mod tests {
 
     #[test]
     fn nightly_selector_after_run_is_rejected() {
-        assert!(
-            Cli::try_parse_from([
-                "aimer",
-                "run",
-                "+nightly",
-                "-Z",
-                "hot-reload",
-            ])
-            .is_err()
-        );
+        assert!(Cli::try_parse_from(["aimer", "run", "+nightly", "-Z", "hot-reload",]).is_err());
     }
 
     #[test]
@@ -618,14 +683,7 @@ mod tests {
 
     #[test]
     fn nightly_flag_resolves_to_wasmi_hot_reload() {
-        let cli = Cli::try_parse_from([
-            "aimer",
-            "+nightly",
-            "run",
-            "-Z",
-            "hot-reload",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "hot-reload"]).unwrap();
         let policy = cli.execution_policy().unwrap().unwrap();
 
         assert_eq!(policy.profile(), BuildProfile::Debug);
@@ -635,14 +693,7 @@ mod tests {
 
     #[test]
     fn nightly_inline_render_resolves_to_native_aot_without_reload() {
-        let cli = Cli::try_parse_from([
-            "aimer",
-            "+nightly",
-            "run",
-            "-Z",
-            "inline-render",
-        ])
-        .unwrap();
+        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "inline-render"]).unwrap();
         let policy = cli.execution_policy().unwrap().unwrap();
 
         assert_eq!(policy.profile(), BuildProfile::Debug);
@@ -652,15 +703,9 @@ mod tests {
 
     #[test]
     fn nightly_hot_reload_rejects_release_profile() {
-        let cli = Cli::try_parse_from([
-            "aimer",
-            "+nightly",
-            "run",
-            "--release",
-            "-Z",
-            "hot-reload",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["aimer", "+nightly", "run", "--release", "-Z", "hot-reload"])
+                .unwrap();
 
         let error = cli.execution_policy().unwrap_err().to_string();
         assert!(error.contains("profile=release"));
@@ -671,14 +716,7 @@ mod tests {
     #[test]
     fn former_wasm_hot_reload_spelling_is_rejected() {
         assert!(
-            Cli::try_parse_from([
-                "aimer",
-                "+nightly",
-                "run",
-                "-Z",
-                "wasm-hot-reload",
-            ])
-            .is_err()
+            Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "wasm-hot-reload",]).is_err()
         );
     }
 }

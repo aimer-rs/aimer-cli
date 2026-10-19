@@ -87,9 +87,7 @@ pub fn map_key_event(key: &KeyEvent) -> Option<ConsoleAction> {
         // Keep both forms used by terminals for Shift+Q. The uppercase event
         // is intentionally accepted even when the modifier bit is absent.
         KeyCode::Char('Q') => Some(ConsoleAction::Quit),
-        KeyCode::Char('q') if modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(ConsoleAction::Quit)
-        }
+        KeyCode::Char('q') if modifiers.contains(KeyModifiers::SHIFT) => Some(ConsoleAction::Quit),
 
         KeyCode::Char('1') => Some(ConsoleAction::SelectPane(ConsolePane::App)),
         KeyCode::Char('2') => Some(ConsoleAction::SelectPane(ConsolePane::Build)),
@@ -98,16 +96,15 @@ pub fn map_key_event(key: &KeyEvent) -> Option<ConsoleAction> {
         KeyCode::F(12) => Some(ConsoleAction::ToggleInspector),
         KeyCode::Char('t') => Some(ConsoleAction::ToggleInspectorTree),
 
-        KeyCode::Char('e') | KeyCode::Char('E') => {
-            Some(ConsoleAction::ToggleSourceLocations)
-        }
+        KeyCode::Char('e') | KeyCode::Char('E') => Some(ConsoleAction::ToggleSourceLocations),
         KeyCode::Char('s') | KeyCode::Char('S') => Some(ConsoleAction::ToggleSelectionMode),
         KeyCode::Char('y') | KeyCode::Char('Y') => Some(ConsoleAction::YankSelection),
 
         // Shift+C is the clear command. Control+C and Command+C copy the
         // selection, falling back to the focused pane when there is none.
-        KeyCode::Char('c') | KeyCode::Char('C')
-            if modifiers == KeyModifiers::SHIFT => Some(ConsoleAction::ClearPane),
+        KeyCode::Char('c') | KeyCode::Char('C') if modifiers == KeyModifiers::SHIFT => {
+            Some(ConsoleAction::ClearPane)
+        }
         KeyCode::Char('c') | KeyCode::Char('C')
             if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
         {
@@ -137,11 +134,7 @@ mod tests {
         KeyEvent::new(code, modifiers)
     }
 
-    fn key_with_kind(
-        code: KeyCode,
-        modifiers: KeyModifiers,
-        kind: KeyEventKind,
-    ) -> KeyEvent {
+    fn key_with_kind(code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) -> KeyEvent {
         KeyEvent::new_with_kind(code, modifiers, kind)
     }
 
@@ -279,10 +272,7 @@ mod tests {
 
     #[test]
     fn unrelated_keys_are_ignored() {
-        assert_eq!(
-            map_key_event(&key(KeyCode::Esc, KeyModifiers::NONE)),
-            None,
-        );
+        assert_eq!(map_key_event(&key(KeyCode::Esc, KeyModifiers::NONE)), None,);
         assert_eq!(
             map_key_event(&key(KeyCode::Char('q'), KeyModifiers::NONE)),
             None,

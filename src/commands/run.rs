@@ -279,6 +279,30 @@ pub fn execute(
     inline_render: bool,
     no_mcp: bool,
 ) -> anyhow::Result<()> {
+    execute_with_package(
+        target,
+        device,
+        None,
+        no_tui,
+        policy,
+        verbose_widget_ir,
+        inline_render,
+        no_mcp,
+    )
+}
+
+pub fn execute_with_package(
+    target: Option<String>,
+    device: Option<String>,
+    package: Option<String>,
+    no_tui: bool,
+    policy: ExecutionPolicy,
+    verbose_widget_ir: bool,
+    inline_render: bool,
+    no_mcp: bool,
+) -> anyhow::Result<()> {
+    let project = crate::commands::project_selection::select_aimer_project(package.as_deref())?;
+    let _project_directory = project.enter()?;
     let selection = native_pipeline_release(policy);
 
     let project_root =

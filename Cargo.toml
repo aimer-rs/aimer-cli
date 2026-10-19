@@ -1,6 +1,6 @@
 [package]
 name = "aimer_cli"
-version = "0.7.1+2"
+version = "0.8.1+1"
 edition = "2024"
 rust-version = "1.98"
 resolver = "3"
@@ -27,8 +27,6 @@ aimer_reload_protocol.workspace = true
 aimer_hot_reload.workspace = true
 
 # Non-local
-
-
 ra_ap_ide = { package = "ide", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
 ra_ap_ide_db = { package = "ide-db", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
 ra_ap_hir = { package = "hir", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
@@ -36,6 +34,9 @@ ra_ap_load_cargo = { package = "load-cargo", git = "https://github.com/Cottons29
 ra_ap_project_model = { package = "project-model", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
 ra_ap_vfs = { package = "vfs", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
 ra_ap_proc_macro_api = { package = "proc-macro-api", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+# ra-ap-rustc_lexer requires these generated Unicode tables to use the same version.
+unicode-ident = "=1.0.24"
+unicode-properties = "=0.1.4"
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",

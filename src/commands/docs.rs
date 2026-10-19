@@ -1,4 +1,4 @@
-//! Query docs.rs crate documentation from the CLI.
+//! Query registry or Rust toolchain documentation from the CLI.
 
 use anyhow::Context;
 
