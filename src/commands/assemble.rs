@@ -8,7 +8,7 @@ use anyhow::{Context, bail};
 
 use crate::commands::run::helpers::host_arch;
 use crate::commands::run::utilities::get_project_root;
-use crate::config::resolve_package_name;
+use crate::config::{resolve_cargo_package_name, resolve_package_name};
 use crate::errors::AimerError;
 use crate::targets::Targets;
 
@@ -20,6 +20,8 @@ pub(crate) const ANDROID_DEFAULT_ABI: &str = "arm64-v8a";
 
 /// The generated Xcode project of the iOS app, relative to the project root.
 pub(crate) const IOS_PROJECT_DIR: &str = "builds/ios";
+/// The Xcode project directory of the macOS app.
+pub(crate) const MACOS_PROJECT_DIR: &str = "builds/macos";
 
 /// Non-interactive bundling entry point used by `aimer assemble <platform>`.
 ///
@@ -52,7 +54,9 @@ pub fn execute_with_package(
         profile_name(release)
     );
 
-    let pkg_name = resolve_package_name(Path::new("."));
+    // Cargo names the binary and library after `Cargo.toml`; the manifest's
+    // application name only decides what the bundle is called.
+    let pkg_name = resolve_cargo_package_name(Path::new("."));
     let reporter = StdioReporter;
 
     let artifact = match target {
@@ -237,6 +241,7 @@ fn copy_lib(
 fn xcode_command(
     project_dir: &str,
     pkg_name: &str,
+    app_name: &str,
     configuration: &str,
     sdk: Option<&str>,
     arch: &str,
@@ -255,20 +260,37 @@ fn xcode_command(
     if let Some(library) = force_load_library {
         cmd.arg(format!("OTHER_LDFLAGS=$(inherited) -force_load {library}"));
     }
-    cmd.arg("SYMROOT=build")
+    // The scaffold names the product after its target, which is the Cargo
+    // package; the override makes the bundle carry the application name.
+    cmd.arg(format!("PRODUCT_NAME={app_name}"))
+        .arg("SYMROOT=build")
         .arg("-arch")
         .arg(arch)
         .current_dir(project_dir);
     cmd
 }
 
-/// The `.app` bundle `xcodebuild` produces for a macOS package.
-pub(crate) fn macos_app_path(pkg_name: &str, release: bool) -> String {
+/// The application name the bundle is shipped under, read from `Aimer.toml` in
+/// the current project directory.
+#[inline]
+pub(crate) fn app_name() -> String {
+    resolve_package_name(Path::new("."))
+}
+
+/// The `.app` bundle `xcodebuild` produces for a macOS package named
+/// `app_name`.
+pub(crate) fn macos_app_path(app_name: &str, release: bool) -> String {
     format!(
         "builds/macos/build/{}/{}.app",
         xcode_configuration(release),
-        pkg_name
+        app_name
     )
+}
+
+/// The executable inside a macOS `.app` bundle, which Xcode names after the
+/// product.
+pub(crate) fn macos_executable_path(app_path: &str, app_name: &str) -> String {
+    format!("{app_path}/Contents/MacOS/{app_name}")
 }
 
 /// Fail unless `target` is the desktop platform of the host.
@@ -346,14 +368,22 @@ fn clean_bundle(path: &str) -> anyhow::Result<()> {
 }
 
 /// Compile the Rust library for macOS.
+///
+/// Like [`build_ios`] this goes through `cargo rustc`, so the compiler writes
+/// down the system frameworks the crate graph links against for
+/// [`package_macos`] to hand to Xcode. See [`link_flags`].
 fn build_macos(release: bool, reporter: &dyn Reporter) -> anyhow::Result<()> {
     let mut cargo = Command::new("cargo");
     cargo
-        .arg("build")
+        .arg("rustc")
         .args(["--target", MACOS_RUST_TARGET, "--lib"]);
     if release {
         cargo.arg("--release");
     }
+    cargo
+        .arg("--")
+        .arg("--print")
+        .arg(link_flags::print_arg(MACOS_RUST_TARGET, release)?);
     reporter.run(cargo, Step::new(StepKind::Cargo, "cargo build for macOS"))
 }
 
@@ -399,7 +429,15 @@ fn package_macos_with_options(
         reporter,
     )?;
 
-    let artifact = macos_app_path(pkg_name, release);
+    // The archive alone does not tell Xcode which frameworks to link, so the
+    // list the compiler last wrote is turned into the project's xcconfig.
+    link_flags::refresh(
+        Path::new(MACOS_PROJECT_DIR),
+        &link_flags::raw_path(MACOS_RUST_TARGET, release),
+    )?;
+
+    let app_name = app_name();
+    let artifact = macos_app_path(&app_name, release);
     clean_bundle(&artifact)?;
 
     let arch = host_arch();
@@ -408,8 +446,9 @@ fn package_macos_with_options(
     reporter.note(format!("Building Xcode project for {arch}..."));
     reporter.run(
         xcode_command(
-            "builds/macos",
+            MACOS_PROJECT_DIR,
             pkg_name,
+            &app_name,
             xcode_configuration(release),
             None,
             arch,
@@ -462,13 +501,14 @@ impl IosPlan {
         }
     }
 
-    /// The `.app` bundle `xcodebuild` produces for `pkg_name`.
-    pub(crate) fn app_path(&self, pkg_name: &str, release: bool) -> String {
+    /// The `.app` bundle `xcodebuild` produces for the application named
+    /// `app_name`.
+    pub(crate) fn app_path(&self, app_name: &str, release: bool) -> String {
         format!(
             "builds/ios/build/{}-{}/{}.app",
             xcode_configuration(release),
             self.sdk,
-            pkg_name
+            app_name
         )
     }
 }
@@ -506,7 +546,8 @@ pub(crate) fn package_ios(
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<String> {
-    let artifact = plan.app_path(pkg_name, release);
+    let app_name = app_name();
+    let artifact = plan.app_path(&app_name, release);
     clean_bundle(&artifact)?;
 
     let lib_name = lib_name_of(pkg_name);
@@ -530,6 +571,7 @@ pub(crate) fn package_ios(
         xcode_command(
             IOS_PROJECT_DIR,
             pkg_name,
+            &app_name,
             xcode_configuration(release),
             Some(plan.sdk),
             plan.arch,

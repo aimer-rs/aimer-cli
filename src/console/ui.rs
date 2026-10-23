@@ -327,7 +327,9 @@ pub fn render(
 
     let (status_icon, status_text) = match state.status {
         Status::Locking => (frames[frame_index], "Locking dependencies...".to_string()),
-        Status::Fetching(p) => (frames[frame_index], format!("Fetching {}%", p)),
+        Status::Fetching(p) | Status::Downloading(p) => {
+            (frames[frame_index], format!("Fetching {}%", p))
+        }
         Status::Compiling(p) => (frames[frame_index], format!("Compiling {}%", p)),
         Status::Building(p) => (frames[frame_index], format!("Building {}%", p)),
         Status::Launching => (frames[frame_index], "Launching...".to_string()),
@@ -343,7 +345,7 @@ pub fn render(
 
     let status_color = match state.status {
         Status::Locking => Color::LightBlue,
-        Status::Fetching(_) => Color::Blue,
+        Status::Fetching(_) | Status::Downloading(_) => Color::Blue,
         Status::Compiling(_) => Color::Yellow,
         Status::Building(_) => Color::Cyan,
         Status::Launching => Color::Magenta,

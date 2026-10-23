@@ -122,7 +122,7 @@ impl Runner for IosRunner {
         let app_path = self
             .app_path
             .clone()
-            .unwrap_or_else(|| self.plan.app_path(&ctx.pkg_name, ctx.release));
+            .unwrap_or_else(|| self.plan.app_path(&assemble::app_name(), ctx.release));
 
         if !install_app(self.plan.simulator, &ctx.device, &app_path, &ctx.tx) {
             return Flow::Abort;
@@ -214,6 +214,9 @@ fn launch_app(
             "simctl",
             "launch",
             "--console-pty",
+            // Without this, launching an app that is still running attaches to
+            // the old process instead of starting the freshly installed build.
+            "--terminate-running-process",
             &device.id,
             bundle_id,
             JSON_OUTPUT_FLAG,

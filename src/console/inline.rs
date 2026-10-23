@@ -1,4 +1,4 @@
-//! Inline terminal presentation for the experimental `-Z inline-render` mode.
+//! Inline terminal presentation, the default console of `aimer run`.
 //!
 //! The runner still emits the normal [`RunnerEvent`] stream. This module only
 //! changes how that stream is presented: completed stages become scrollback,
@@ -17,6 +17,7 @@ use colored::Colorize;
 use crossterm::event::Event;
 use crossterm::terminal;
 use tokio::runtime::Runtime;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::commands::run::Device;
 use crate::console::hotkeys::{ConsoleAction, ConsolePane, map_key_event};
@@ -30,6 +31,7 @@ use crate::tui::RawModeGuard;
 
 const SPINNERS: [&str; 10] = ["⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"];
 const BUILD_LOCK_WAIT_PREFIX: &str = "Blocking waiting for file lock";
+const NOTICE_VISIBLE_FOR: Duration = Duration::from_secs(4);
 
 /// State shared by the inline renderer and its input handler.
 pub struct InlineSession {
@@ -42,8 +44,9 @@ pub struct InlineSession {
     /// Current live-status spinner frame.
     pub frame: usize,
     hot_reload_enabled: bool,
-    notice: Option<String>,
-    build_lock_wait: Option<String>,
+    notice: Option<(String, Instant)>,
+    // The cargo message and when the wait began.
+    build_lock_wait: Option<(String, Instant)>,
 }
 
 impl InlineSession {
@@ -130,7 +133,10 @@ impl InlineSession {
         }
 
         let kind = match status {
-            Status::Locking | Status::Fetching(_) | Status::Compiling(_) => StageKind::Compile,
+            Status::Locking => StageKind::Locking,
+            Status::Fetching(_) => StageKind::Fetching,
+            Status::Downloading(_) => StageKind::Downloading,
+            Status::Compiling(_) => StageKind::Compile,
             Status::Building(_) => StageKind::Assemble,
             Status::Launching => StageKind::Launch,
             Status::Running => StageKind::Application,
@@ -138,9 +144,10 @@ impl InlineSession {
         };
         let id = self.ensure_stage(kind);
         let progress = match status {
-            Status::Fetching(percent) | Status::Compiling(percent) | Status::Building(percent) => {
-                Some(StageProgress::new(percent as u64, Some(100)))
-            }
+            Status::Fetching(percent)
+            | Status::Downloading(percent)
+            | Status::Compiling(percent)
+            | Status::Building(percent) => Some(StageProgress::new(percent as u64, Some(100))),
             Status::Locking | Status::Launching | Status::Running => None,
             Status::Error | Status::Idling => None,
         };
@@ -157,18 +164,40 @@ impl InlineSession {
         self.build_lock_wait = None;
     }
 
-    /// Add a one-line notice to the current application-visible transcript.
+    /// Show a one-line notice in the live region for a few seconds.
     pub fn notice(&mut self, notice: String) {
-        self.notice = Some(notice);
+        self.notice = Some((notice, Instant::now()));
+    }
+
+    fn active_notice(&self, now: Instant) -> Option<&str> {
+        self.notice
+            .as_ref()
+            .filter(|(_, shown_at)| now.saturating_duration_since(*shown_at) < NOTICE_VISIBLE_FOR)
+            .map(|(notice, _)| notice.as_str())
     }
 
     fn push_build_detail(&mut self, message: String) {
         if message.trim_start().starts_with(BUILD_LOCK_WAIT_PREFIX) {
-            self.build_lock_wait = Some(message.clone());
+            // Cargo repeats the notice; the wait began at the first one.
+            let since = self.build_lock_wait.as_ref().map_or_else(Instant::now, |(_, since)| *since);
+            self.build_lock_wait = Some((message.clone(), since));
         }
         self.state.push_build_log(message.clone());
-        let stage = self.ensure_detail_stage(self.build_kind());
+        let stage = self.ensure_detail_stage(self.build_detail_kind());
         let _ = self.stages.append_detail(stage, message);
+    }
+
+    /// The stage a build log line belongs to. While cargo is locking, fetching
+    /// or downloading, its output stays with that phase instead of opening a
+    /// compile stage that would end the phase.
+    fn build_detail_kind(&self) -> StageKind {
+        self.stages
+            .active()
+            .and_then(|id| self.stages.stage(id))
+            .filter(|stage| stage.status() == StageStatus::Running)
+            .map(|stage| stage.kind().clone())
+            .filter(StageKind::is_preparation)
+            .unwrap_or_else(|| self.build_kind())
     }
 
     fn build_kind(&self) -> StageKind {
@@ -190,12 +219,33 @@ impl InlineSession {
         self.ensure_stage(kind)
     }
 
+    fn is_unstarted_compile(&self, id: StageId) -> bool {
+        self.stages.stage(id).is_some_and(|stage| {
+            stage.status() == StageStatus::Running
+                && stage.kind() == &StageKind::Compile
+                && stage
+                    .progress()
+                    .and_then(StageProgress::percentage)
+                    .unwrap_or(0)
+                    == 0
+        })
+    }
+
     fn ensure_stage(&mut self, kind: StageKind) -> StageId {
         if let Some(id) = self.stages.active() {
             let same_kind = self.stages.stage(id).is_some_and(|stage| {
                 stage.status() == StageStatus::Running && stage.kind() == &kind
             });
             if same_kind {
+                return id;
+            }
+            // The build opens a compile stage before cargo says what it is doing.
+            // While nothing has compiled it becomes the first phase, so the
+            // transcript does not start with an empty compile entry.
+            if kind.is_preparation()
+                && self.is_unstarted_compile(id)
+                && self.stages.retag(id, kind.clone()).is_ok()
+            {
                 return id;
             }
             let _ = self.stages.finish(id, Instant::now());
@@ -207,6 +257,8 @@ impl InlineSession {
 /// An inline renderer that updates only the most recent managed output region.
 pub struct InlineRenderer<W> {
     writer: W,
+    // Each frame is composed here and written at once so partial redraws never show.
+    frame: Vec<u8>,
     committed_stages: Vec<StageId>,
     emitted_details: HashMap<StageId, usize>,
     live_region_active: bool,
@@ -223,6 +275,7 @@ impl<W: Write> InlineRenderer<W> {
     pub fn new(writer: W) -> Self {
         Self {
             writer,
+            frame: Vec::new(),
             committed_stages: Vec::new(),
             emitted_details: HashMap::new(),
             live_region_active: false,
@@ -288,18 +341,25 @@ impl<W: Write> InlineRenderer<W> {
 
         let application_details_present = self.append_expanded_details(session, width)?;
         let application_separator = application_details_present.then(|| separator_line(width));
-        if let Some(separator) = &application_separator {
-            write!(self.writer, "\r\x1b[2K{separator}\n")?;
-        }
 
-        let live_stage = render_active_stage(session, width);
-        let navbar = render_navbar(session, width);
-        write!(self.writer, "\r\x1b[2K{live_stage}\n\r\x1b[2K{navbar}")?;
-        self.writer.flush()?;
-        self.live_lines = match application_separator {
-            Some(separator) => vec![separator, live_stage, navbar],
-            None => vec![live_stage, navbar],
-        };
+        let mut live_lines = Vec::with_capacity(4);
+        live_lines.extend(application_separator);
+        live_lines.push(render_active_stage(session, width));
+        if let Some(notice) = session.active_notice(now) {
+            live_lines.push(render_notice(notice, width));
+        }
+        live_lines.push(render_navbar(session, width));
+        // The cursor rests at the end of the last live row, so rows are joined
+        // by newlines rather than terminated by them.
+        let last = live_lines.len() - 1;
+        for (index, line) in live_lines.iter().enumerate() {
+            write!(self.frame, "\r\x1b[2K{line}")?;
+            if index != last {
+                self.frame.push(b'\n');
+            }
+        }
+        self.flush_frame()?;
+        self.live_lines = live_lines;
         self.last_width = width;
         self.live_region_active = true;
         Ok(())
@@ -312,8 +372,8 @@ impl<W: Write> InlineRenderer<W> {
                 .map(|(width, _)| width as usize)
                 .unwrap_or(self.last_width);
             self.clear_live_region(width)?;
-            self.writer.write_all(b"\r\n")?;
-            self.writer.flush()?;
+            self.frame.extend_from_slice(b"\r\n");
+            self.flush_frame()?;
         }
         Ok(())
     }
@@ -325,10 +385,13 @@ impl<W: Write> InlineRenderer<W> {
                 .iter()
                 .map(|line| physical_rows(line, width))
                 .sum::<usize>();
-            self.writer.write_all(b"\r\x1b[2K")?;
+            self.frame.extend_from_slice(b"\r\x1b[2K");
             for _ in 1..rows {
-                self.writer.write_all(b"\x1b[1A\r\x1b[2K")?;
+                self.frame.extend_from_slice(b"\x1b[1A\r\x1b[2K");
             }
+            // A terminal that reflowed differently than `physical_rows`
+            // predicted must not leave stale rows below the live region.
+            self.frame.extend_from_slice(b"\r\x1b[J");
             self.live_region_active = false;
         }
         Ok(())
@@ -336,11 +399,13 @@ impl<W: Write> InlineRenderer<W> {
 
     fn append_line(&mut self, line: String, width: usize) -> io::Result<()> {
         let line = fit_line(line, width);
-        write!(self.writer, "\r\x1b[2K{line}\n")
+        write!(self.frame, "\r\x1b[2K{line}\n")
     }
 
-    fn append_empty(&mut self, width: usize) -> io::Result<()> {
-        self.append_line(String::new(), width)
+    fn flush_frame(&mut self) -> io::Result<()> {
+        self.writer.write_all(&self.frame)?;
+        self.frame.clear();
+        self.writer.flush()
     }
 
     fn append_expanded_details(
@@ -387,7 +452,11 @@ fn physical_rows(line: &str, width: usize) -> usize {
     // The cursor is at the end of the last live line, so every wrapped row
     // above it must be cleared before the next frame starts at the top.
     let width = width.max(1);
-    strip_ansi(line).chars().count().saturating_sub(1) / width + 1
+    display_width(line).saturating_sub(1) / width + 1
+}
+
+fn display_width(line: &str) -> usize {
+    UnicodeWidthStr::width(strip_ansi(line).as_str())
 }
 
 fn separator_line(width: usize) -> String {
@@ -400,11 +469,18 @@ fn render_lines(session: &InlineSession, width: usize) -> Vec<String> {
 }
 
 fn render_active_stage(session: &InlineSession, width: usize) -> String {
-    let line = if let Some(message) = &session.build_lock_wait {
+    let line = if let Some((message, since)) = &session.build_lock_wait {
+        // Name the cause: this is cargo queueing behind another process, not a
+        // stalled build, and pressing `r` cannot shorten it.
         format!(
-            "  {} {}",
+            "  {} {} {}",
             SPINNERS[session.frame % SPINNERS.len()],
-            message.yellow().bold()
+            message.yellow().bold(),
+            format!(
+                "· {} · another cargo process (editor check, rust-analyzer) holds the lock",
+                format_duration(since.elapsed())
+            )
+            .dimmed()
         )
     } else if let Some(id) = session.stages.active()
         && let Some(stage) = session.stages.stage(id)
@@ -415,19 +491,15 @@ fn render_active_stage(session: &InlineSession, width: usize) -> String {
             StageStatus::Failed => "✗",
             StageStatus::Cancelled => "⊘",
         };
-        let elapsed = stage
-            .timing()
-            .elapsed()
-            .unwrap_or_else(|| stage.timing().elapsed_at(Instant::now()));
         format!(
             "  {indicator} {} {}",
             styled_stage_label(stage.kind().label()),
-            format_duration(elapsed)
+            stage_metric(stage, Instant::now())
         )
     } else {
         format!("  status: {}", status_label(&session.state.status))
     };
-    fit_line(line, width)
+    truncate_styled(&line, width)
 }
 
 fn detail_prefix(kind: &StageKind) -> &'static str {
@@ -438,12 +510,16 @@ fn detail_prefix(kind: &StageKind) -> &'static str {
     }
 }
 
+fn render_notice(notice: &str, width: usize) -> String {
+    fit_line(format!("  {notice}"), width).yellow().to_string()
+}
+
 fn render_navbar(session: &InlineSession, width: usize) -> String {
     let mut navbar = String::from("  ↑/↓ select · ");
     if session.hot_reload_enabled {
-        navbar.push_str("r hot-reload · ");
+        navbar.push_str("^R hot-reload · ");
     }
-    navbar.push_str("⇧R hot-restart · ⏎ expand · ⇧Q quit");
+    navbar.push_str("r restart · ⏎ expand · ⇧Q quit");
     fit_line(navbar, width).dimmed().to_string()
 }
 
@@ -482,7 +558,7 @@ fn render_managed_lines(
         }
     }
 
-    if let Some(notice) = &session.notice {
+    if let Some(notice) = session.active_notice(now) {
         lines.push(format!("  {notice}"));
     }
     lines.push(String::new());
@@ -507,27 +583,32 @@ fn render_stage_summary(
         StageStatus::Failed => "✗",
         StageStatus::Cancelled => "⊘",
     };
-    let elapsed = stage
-        .timing()
-        .elapsed()
-        .unwrap_or_else(|| stage.timing().elapsed_at(now));
     let detail_lines: usize = stage
         .details()
         .iter()
         .map(|detail| detail.line_count())
         .sum();
-    let progress = stage
-        .progress()
-        .and_then(|progress| progress.percentage())
-        .map(|percent| format!(" · {percent}%"))
-        .unwrap_or_default();
     format!(
-        "{marker} {icon} {} {}{} · {} lines",
+        "{marker} {icon} {} {} · {} lines",
         styled_stage_label(stage.kind().label()),
-        format_duration(elapsed),
-        progress,
+        stage_metric(stage, now),
         detail_lines,
     )
+}
+
+/// What a stage reports next to its label: the percentage while it is running
+/// and has a determinate one, otherwise how long it took (or has taken so far).
+fn stage_metric(stage: &crate::console::stage::Stage, now: Instant) -> String {
+    if stage.status() == StageStatus::Running
+        && let Some(percent) = stage.progress().and_then(StageProgress::percentage)
+    {
+        return format!("{percent}%");
+    }
+    let elapsed = stage
+        .timing()
+        .elapsed()
+        .unwrap_or_else(|| stage.timing().elapsed_at(now));
+    format_duration(elapsed)
 }
 
 fn styled_stage_label(label: &str) -> String {
@@ -543,24 +624,61 @@ fn detail_text_lines(stage: &crate::console::stage::Stage) -> Vec<String> {
         .collect()
 }
 
-fn fit_line(mut line: String, width: usize) -> String {
+fn fit_line(line: String, width: usize) -> String {
     // ANSI-styled detail must remain intact. Let the terminal wrap a styled
     // line rather than truncating in the middle of an escape sequence and
     // leaking its style into the rest of the managed region.
-    if line.contains('\x1b') || line.chars().count() <= width {
+    if line.contains('\x1b') {
         return line;
     }
-    line.truncate(
-        line.char_indices()
-            .nth(width.saturating_sub(1))
-            .map_or(0, |(i, _)| i),
-    );
-    line.push('…');
-    line
+    truncate_styled(&line, width)
+}
+
+/// Truncate `line` to `width` terminal columns, keeping ANSI styling intact.
+///
+/// Live rows use this so a narrow window never wraps them: every live row then
+/// occupies exactly one terminal row, which keeps the redraw arithmetic exact
+/// across a resize. Scrollback lines keep using [`fit_line`] so log text is
+/// never cut.
+fn truncate_styled(line: &str, width: usize) -> String {
+    let width = width.max(1);
+    if display_width(line) <= width {
+        return line.to_owned();
+    }
+    let budget = width - 1;
+    let mut out = String::with_capacity(line.len());
+    let mut used = 0;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            out.push(c);
+            for next in chars.by_ref() {
+                out.push(next);
+                if next.is_ascii_alphabetic() || next == '@' || next == '~' {
+                    break;
+                }
+            }
+            continue;
+        }
+        let columns = c.width().unwrap_or(0);
+        if used + columns > budget {
+            break;
+        }
+        used += columns;
+        out.push(c);
+    }
+    out.push('…');
+    if line.contains('\x1b') {
+        out.push_str("\x1b[0m");
+    }
+    out
 }
 
 fn format_duration(duration: Duration) -> String {
-    if duration.as_secs() > 0 {
+    let secs = duration.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else if secs > 0 {
         format!(
             "{}.{:01}s",
             duration.as_secs(),
@@ -575,6 +693,7 @@ fn status_label(status: &Status) -> &'static str {
     match status {
         Status::Locking => "locking",
         Status::Fetching(_) => "fetching",
+        Status::Downloading(_) => "downloading",
         Status::Compiling(_) => "compiling",
         Status::Building(_) => "assembling",
         Status::Launching => "launching",
@@ -592,12 +711,14 @@ pub fn start(
     hot_reload_enabled: bool,
     control_session: Option<SessionHandle>,
 ) -> anyhow::Result<()> {
-    if !stdout().is_terminal() {
+    // Raw mode needs a terminal on both ends: without one (a pipe, CI, an IDE's
+    // run window) fall back to plain logs rather than failing to start.
+    if !stdout().is_terminal() || !io::stdin().is_terminal() {
         return super::start_no_tui(device, pkg_name, release, control_session);
     }
 
     let _guard = RawModeGuard::new()?;
-    let (tx, rx) = crossbeam::channel::unbounded();
+    let (mut tx, mut rx) = crossbeam::channel::unbounded();
     let inspector_runtime =
         Runtime::new().context("failed to start inspector server tokio runtime")?;
     let inspector_server_address = match device.target {
@@ -655,9 +776,10 @@ pub fn start(
                     {
                         continue;
                     }
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    // The superseded run keeps its old channel, which is dropped here,
+                    // so its late events cannot reach the new run's transcript.
+                    current_child.stop();
+                    (tx, rx) = crossbeam::channel::unbounded();
                     session.apply_status(Status::Compiling(0));
                     renderer.reset();
                     current_child = super::spawn_runner(
@@ -671,9 +793,7 @@ pub fn start(
                     );
                 }
                 SessionCommand::Stop { reply } => {
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
                     control_session
                         .as_ref()
                         .expect("session command requires a session")
@@ -719,9 +839,7 @@ pub fn start(
             };
             match action {
                 ConsoleAction::Quit => {
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
                     quit = true;
                 }
                 ConsoleAction::HotReload => {
@@ -734,7 +852,7 @@ pub fn start(
                         session.notice("Hot reload requested".to_string());
                     } else {
                         session.notice(
-                            "Hot reload is unavailable for this target; press Shift+R for hot restart"
+                            "Hot reload is unavailable for this target; press r to restart"
                                 .to_string(),
                         );
                     }
@@ -746,9 +864,8 @@ pub fn start(
                         session.notice("Restart is busy; try again shortly".to_string());
                         continue;
                     }
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
+                    (tx, rx) = crossbeam::channel::unbounded();
                     session.reset_for_restart();
                     renderer.reset();
                     current_child = super::spawn_runner(

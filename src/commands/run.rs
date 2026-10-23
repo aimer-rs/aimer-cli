@@ -276,7 +276,7 @@ pub fn execute(
     no_tui: bool,
     policy: ExecutionPolicy,
     verbose_widget_ir: bool,
-    inline_render: bool,
+    tui: bool,
     no_mcp: bool,
 ) -> anyhow::Result<()> {
     execute_with_package(
@@ -286,7 +286,7 @@ pub fn execute(
         no_tui,
         policy,
         verbose_widget_ir,
-        inline_render,
+        tui,
         no_mcp,
     )
 }
@@ -298,7 +298,7 @@ pub fn execute_with_package(
     no_tui: bool,
     policy: ExecutionPolicy,
     verbose_widget_ir: bool,
-    inline_render: bool,
+    tui: bool,
     no_mcp: bool,
 ) -> anyhow::Result<()> {
     let project = crate::commands::project_selection::select_aimer_project(package.as_deref())?;
@@ -348,7 +348,7 @@ pub fn execute_with_package(
         }
     };
 
-    let pkg_name = crate::config::resolve_package_name(std::path::Path::new("."));
+    let pkg_name = crate::config::resolve_cargo_package_name(std::path::Path::new("."));
 
     let session_runtime = if selection != PipelineSelection::HotReload {
         let configuration = crate::session::RunConfiguration {
@@ -402,7 +402,10 @@ pub fn execute_with_package(
     if no_tui {
         console::start_no_tui(selected_device, pkg_name, release, session)
             .context("console exited with an error")?;
-    } else if inline_render {
+    } else if tui {
+        console::start(selected_device, pkg_name, release, session)
+            .context("interactive console exited with an error")?;
+    } else {
         console::start_inline(
             selected_device,
             pkg_name,
@@ -411,9 +414,6 @@ pub fn execute_with_package(
             session,
         )
         .context("inline console exited with an error")?;
-    } else {
-        console::start(selected_device, pkg_name, release, session)
-            .context("interactive console exited with an error")?;
     }
     Ok(())
 }

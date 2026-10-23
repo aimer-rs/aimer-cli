@@ -7,7 +7,8 @@ use crate::config::AimerManifest;
 
 /// Migrate platform build scaffolds to the latest version.
 ///
-/// Reads `Aimer.toml` to get the project `name` and `group`, then regenerates
+/// Reads `Aimer.toml` to get the application name and `group`, and `Cargo.toml`
+/// for the package the scaffold identifiers are derived from, then regenerates
 /// the build scaffold for the requested target (or all targets) using the
 /// templates bundled in the current CLI version.
 pub fn execute(target: String) -> anyhow::Result<()> {
@@ -29,7 +30,10 @@ fn execute_in(target: String, dir: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("resolving project directory {}", dir.display()))?;
     let dir = canonical.as_path();
 
-    let name = manifest.package.name.clone();
+    // Identifiers (Xcode project, desktop entry, Trunk bin) follow the Cargo
+    // package; the manifest name is the application's display name.
+    let name = crate::config::resolve_cargo_package_name(dir);
+    let app_name = manifest.package.name.clone();
     let group = if manifest.package.group.is_empty() {
         "com.example.app".to_string()
     } else {
@@ -37,19 +41,75 @@ fn execute_in(target: String, dir: &Path) -> anyhow::Result<()> {
     };
 
     match target.as_str() {
-        "web" => migrate_web(dir, &name, &group)?,
-        "macos" => migrate_platform(dir, "macos", &name, &group, &create::macos::create)?,
-        "ios" => migrate_platform(dir, "ios", &name, &group, &create::ios::create)?,
-        "android" => migrate_platform(dir, "android", &name, &group, &create::android::create)?,
-        "windows" => migrate_platform(dir, "windows", &name, &group, &create::window::create)?,
-        "linux" => migrate_platform(dir, "linux", &name, &group, &create::linux::create)?,
+        "web" => migrate_web(dir, &name, &app_name, &group)?,
+        "macos" => migrate_platform(
+            dir,
+            "macos",
+            &name,
+            &app_name,
+            &group,
+            &create::macos::create,
+        )?,
+        "ios" => migrate_platform(dir, "ios", &name, &app_name, &group, &create::ios::create)?,
+        "android" => migrate_platform(
+            dir,
+            "android",
+            &name,
+            &app_name,
+            &group,
+            &create::android::create,
+        )?,
+        "windows" => migrate_platform(
+            dir,
+            "windows",
+            &name,
+            &app_name,
+            &group,
+            &create::window::create,
+        )?,
+        "linux" => migrate_platform(
+            dir,
+            "linux",
+            &name,
+            &app_name,
+            &group,
+            &create::linux::create,
+        )?,
         "all" => {
-            migrate_web(dir, &name, &group)?;
-            migrate_platform(dir, "macos", &name, &group, &create::macos::create)?;
-            migrate_platform(dir, "ios", &name, &group, &create::ios::create)?;
-            migrate_platform(dir, "android", &name, &group, &create::android::create)?;
-            migrate_platform(dir, "windows", &name, &group, &create::window::create)?;
-            migrate_platform(dir, "linux", &name, &group, &create::linux::create)?;
+            migrate_web(dir, &name, &app_name, &group)?;
+            migrate_platform(
+                dir,
+                "macos",
+                &name,
+                &app_name,
+                &group,
+                &create::macos::create,
+            )?;
+            migrate_platform(dir, "ios", &name, &app_name, &group, &create::ios::create)?;
+            migrate_platform(
+                dir,
+                "android",
+                &name,
+                &app_name,
+                &group,
+                &create::android::create,
+            )?;
+            migrate_platform(
+                dir,
+                "windows",
+                &name,
+                &app_name,
+                &group,
+                &create::window::create,
+            )?;
+            migrate_platform(
+                dir,
+                "linux",
+                &name,
+                &app_name,
+                &group,
+                &create::linux::create,
+            )?;
         }
         other => {
             bail!(
@@ -58,7 +118,7 @@ fn execute_in(target: String, dir: &Path) -> anyhow::Result<()> {
         }
     }
 
-    println!("Migration complete for '{target}'. Project: {name} (group: {group})");
+    println!("Migration complete for '{target}'. Project: {app_name} (group: {group})");
     Ok(())
 }
 
@@ -67,7 +127,7 @@ fn execute_in(target: String, dir: &Path) -> anyhow::Result<()> {
 /// Selectively removes only the scaffold files (Trunk.toml, index.html,
 /// favicon, apple-touch-icon) so that build artifacts in `pkg/` and `dist/`
 /// are preserved, then regenerates from the latest templates.
-fn migrate_web(dir: &Path, name: &str, group: &str) -> anyhow::Result<()> {
+fn migrate_web(dir: &Path, name: &str, app_name: &str, group: &str) -> anyhow::Result<()> {
     let web_dir = dir.join("builds/web");
     if web_dir.exists() {
         for file in &[
@@ -82,7 +142,7 @@ fn migrate_web(dir: &Path, name: &str, group: &str) -> anyhow::Result<()> {
             }
         }
     }
-    create::web::create(dir, name, group);
+    create::web::create(dir, name, app_name, group);
     println!("  ✔ web scaffold migrated");
     Ok(())
 }
@@ -95,15 +155,16 @@ fn migrate_platform(
     dir: &Path,
     platform: &str,
     name: &str,
+    app_name: &str,
     group: &str,
-    create_fn: &dyn Fn(&Path, &str, &str),
+    create_fn: &dyn Fn(&Path, &str, &str, &str),
 ) -> anyhow::Result<()> {
     let platform_dir = dir.join("builds").join(platform);
     if platform_dir.exists() {
         fs::remove_dir_all(&platform_dir)
             .with_context(|| format!("removing builds/{platform}/"))?;
     }
-    create_fn(dir, name, group);
+    create_fn(dir, name, app_name, group);
     println!("  ✔ {platform} scaffold migrated");
     Ok(())
 }
@@ -127,7 +188,7 @@ mod tests {
         fs::write(web_dir.join("index.html"), "old content").unwrap();
         fs::write(web_dir.join("pkg/artifact.wasm"), "wasm data").unwrap();
 
-        migrate_web(dir, "demo-app", "com.example.demo").unwrap();
+        migrate_web(dir, "demo-app", "Demo App", "com.example.demo").unwrap();
 
         // Scaffold files are regenerated.
         let html = fs::read_to_string(web_dir.join("index.html")).unwrap();
@@ -157,6 +218,7 @@ mod tests {
             dir,
             "linux",
             "demo-app",
+            "Demo App",
             "com.example.demo",
             &create::linux::create,
         )
@@ -182,6 +244,7 @@ mod tests {
             dir,
             "ios",
             "demo_app",
+            "demo_app",
             "com.example.demo",
             &create::ios::create,
         )
@@ -189,6 +252,7 @@ mod tests {
         migrate_platform(
             dir,
             "android",
+            "demo_app",
             "demo_app",
             "com.example.demo",
             &create::android::create,

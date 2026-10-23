@@ -27,7 +27,7 @@ use ra_ap_ide_db::{
     ra_fixture::RaFixtureConfig,
 };
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
-use ra_ap_project_model::{CargoConfig, RustLibSource};
+use ra_ap_project_model::{CargoConfig, RustLibSource, TargetDirectoryConfig};
 use ra_ap_vfs::{AbsPathBuf, FileExcluded, Vfs, VfsPath};
 use serde_json::{Value, json};
 use tempfile::TempDir;

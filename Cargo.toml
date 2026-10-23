@@ -1,17 +1,34 @@
 [package]
 name = "aimer_cli"
-version = "0.8.1+1"
+version = "0.9.1"
 edition = "2024"
-rust-version = "1.98"
+rust-version = "1.99.1"
 resolver = "3"
+build = "build.rs"
 
 [features]
-default = ["bundled-proc-macro"]
+# The default build is the lightweight CLI: no MCP server, embedded
+# rust-analyzer, or proc-macro helper.
+default = []
+# The `aimer mcp` server and the embedded rust-analyzer IDE engine behind it.
+mcp = [
+  "dep:rmcp",
+  "dep:unicode-ident",
+  "dep:unicode-properties",
+  "dep:ra_ap_ide",
+  "dep:ra_ap_ide_db",
+  "dep:ra_ap_hir",
+  "dep:ra_ap_load_cargo",
+  "dep:ra_ap_project_model",
+  "dep:ra_ap_vfs",
+  "dep:ra_ap_proc_macro_api",
+]
 # Bundle the matching Rust Analyzer proc-macro server in the Aimer executable.
-bundled-proc-macro = []
+bundled-proc-macro = ["mcp"]
 # Opt in to integration tests that build and execute generated hot-reload guests.
 hot-reload = []
-legacy-lsp = []
+# Expose the legacy LSP-shaped tool surface from the MCP server.
+legacy-lsp = ["mcp"]
 
 
 [[bin]]
@@ -27,16 +44,17 @@ aimer_reload_protocol.workspace = true
 aimer_hot_reload.workspace = true
 
 # Non-local
-ra_ap_ide = { package = "ide", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
-ra_ap_ide_db = { package = "ide-db", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
-ra_ap_hir = { package = "hir", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
-ra_ap_load_cargo = { package = "load-cargo", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
-ra_ap_project_model = { package = "project-model", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
-ra_ap_vfs = { package = "vfs", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
-ra_ap_proc_macro_api = { package = "proc-macro-api", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release" }
+ra_ap_ide = { package = "ide", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+ra_ap_ide_db = { package = "ide-db", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+ra_ap_hir = { package = "hir", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+ra_ap_load_cargo = { package = "load-cargo", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+ra_ap_project_model = { package = "project-model", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+ra_ap_vfs = { package = "vfs", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
+ra_ap_proc_macro_api = { package = "proc-macro-api", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
 # ra-ap-rustc_lexer requires these generated Unicode tables to use the same version.
-unicode-ident = "=1.0.24"
-unicode-properties = "=0.1.4"
+unicode-ident = { version = "=1.0.24", optional = true }
+unicode-properties = { version = "=0.1.4", optional = true }
+unicode-width = "0.2.2"
 tokio = { workspace = true, features = [
   "rt-multi-thread",
   "macros",
@@ -54,7 +72,7 @@ tokio-tungstenite.workspace = true
 dirs.workspace = true
 uuid.workspace = true
 sysinfo.workspace = true
-rmcp.workspace = true
+rmcp = { workspace = true, optional = true }
 ansi-to-tui.workspace = true
 clap.workspace = true
 crossterm.workspace = true
@@ -85,6 +103,10 @@ wasm-bindgen-cli-support.workspace = true
 notify.workspace = true
 proc-macro2.workspace = true
 regex.workspace = true
+
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 
 [dev-dependencies]

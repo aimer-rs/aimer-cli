@@ -404,7 +404,15 @@ fn jni_libs_dir_follows_the_abi() {
 
 #[test]
 fn xcode_command_carries_the_configuration_and_no_sdk_on_macos() {
-    let cmd = xcode_command("builds/macos", "my_app", "Release", None, "arm64", None);
+    let cmd = xcode_command(
+        "builds/macos",
+        "my_app",
+        "My App",
+        "Release",
+        None,
+        "arm64",
+        None,
+    );
     let args = args_of(&cmd);
     assert!(args.contains(&"-configuration".to_string()));
     assert!(args.contains(&"Release".to_string()));
@@ -413,9 +421,36 @@ fn xcode_command_carries_the_configuration_and_no_sdk_on_macos() {
 }
 
 #[test]
+fn xcode_command_names_the_product_after_the_application() {
+    let cmd = xcode_command(
+        "builds/macos",
+        "my_app",
+        "My App",
+        "Debug",
+        None,
+        "arm64",
+        None,
+    );
+    let args = args_of(&cmd);
+    // The project and target keep the Cargo package; only the product renames.
+    assert!(args.contains(&"my_app.xcodeproj".to_string()));
+    assert!(args.contains(&"my_app".to_string()));
+    assert!(args.contains(&"PRODUCT_NAME=My App".to_string()));
+}
+
+#[test]
+fn macos_executable_is_named_after_the_application() {
+    assert_eq!(
+        macos_executable_path("builds/macos/build/Debug/My App.app", "My App"),
+        "builds/macos/build/Debug/My App.app/Contents/MacOS/My App"
+    );
+}
+
+#[test]
 fn xcode_command_force_loads_the_rust_archive_for_hot_reload() {
     let cmd = xcode_command(
         "builds/macos",
+        "my_app",
         "my_app",
         "Debug",
         None,
@@ -432,6 +467,7 @@ fn xcode_command_force_loads_the_rust_archive_for_hot_reload() {
 fn xcode_command_carries_the_sdk_on_ios() {
     let cmd = xcode_command(
         "builds/ios",
+        "my_app",
         "my_app",
         "Debug",
         Some("iphonesimulator"),

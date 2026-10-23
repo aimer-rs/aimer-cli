@@ -64,7 +64,10 @@ impl Reporter for ConsoleReporter<'_> {
     }
 
     fn run(&self, mut cmd: Command, step: Step) -> anyhow::Result<()> {
-        let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+        let mut child = match cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn() {
             Ok(child) => child,
             Err(e) => bail!("failed to start {}: {e}", step.action),
         };
@@ -108,6 +111,11 @@ pub fn host_arch() -> &'static str {
 /// can be killed on cancel, and start streaming both pipes with the supplied
 /// streamers.
 ///
+/// stdin is closed on purpose. The console reads hotkeys from the terminal, and
+/// a child that inherited it would read the same keystrokes: `devicectl
+/// --console` forwards its stdin to the app and sits blocked in `read`, so it
+/// took the first `r` and the console never saw it.
+///
 /// Returns `false` (after reporting `spawn_fail_msg` with `fail_status`) when
 /// the process could not be spawned, so callers can simply
 /// `if !spawn_streamed(..) { return; }`.
@@ -120,7 +128,10 @@ pub fn spawn_streamed(
     stream_out: impl FnOnce(ChildStdout, Sender<RunnerEvent>),
     stream_err: impl FnOnce(ChildStderr, Sender<RunnerEvent>),
 ) -> bool {
-    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let mut child = match cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn() {
         Ok(child) => child,
         Err(e) => {
             build_log(tx, format!("{spawn_fail_msg}: {e}"));
@@ -148,7 +159,8 @@ pub fn run_to_completion(
     spawn_fail_msg: &str,
     fail_msg: &str,
 ) -> bool {
-    match cmd.status() {
+    // The console owns the terminal's stdin; see `spawn_streamed`.
+    match cmd.stdin(Stdio::null()).status() {
         Ok(status) if status.success() => true,
         Ok(_) => {
             fail(tx, fail_msg);
@@ -208,6 +220,58 @@ mod tests {
             .unwrap();
 
         assert!(build_logs(&rx).contains(&"building".to_string()));
+    }
+
+    /// Run `work` on a thread and report whether it returned within a few
+    /// seconds. A child that kept the terminal's stdin would sit in `read`.
+    fn finishes_promptly(work: impl FnOnce() + Send + 'static) -> bool {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            work();
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok()
+    }
+
+    #[test]
+    fn a_step_cannot_read_the_consoles_stdin() {
+        let (tx, _rx, child) = console();
+
+        assert!(finishes_promptly(move || {
+            // `cat` with no arguments copies stdin until EOF.
+            let _ = ConsoleReporter::new(&tx, &child)
+                .run(Command::new("cat"), Step::new(StepKind::Other, "cat"));
+        }));
+    }
+
+    #[test]
+    fn a_streamed_launch_cannot_read_the_consoles_stdin() {
+        let (tx, _rx, child) = console();
+        let waited = Arc::clone(&child);
+
+        assert!(finishes_promptly(move || {
+            spawn_streamed(
+                Command::new("cat"),
+                &tx,
+                &child,
+                "failed",
+                Status::Error,
+                |out, _| drop(out),
+                |err, _| drop(err),
+            );
+            wait_for_child(&waited);
+        }));
+    }
+
+    #[test]
+    fn a_completed_command_cannot_read_the_consoles_stdin() {
+        let (tx, _rx, _child) = console();
+
+        assert!(finishes_promptly(move || {
+            run_to_completion(Command::new("cat"), &tx, "spawn failed", "exit failed");
+        }));
     }
 
     #[test]

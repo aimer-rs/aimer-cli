@@ -14,6 +14,11 @@ impl EmbeddedRustAnalyzer {
         // treat `#[cfg(test)]` code as part of the workspace analysis.
         cargo_config.all_targets = true;
         cargo_config.set_test = true;
+        // Build scripts run through `cargo check`, which holds the lock on the
+        // target directory while it works. In the shared `target/debug` that
+        // stalls every `aimer run` build started meanwhile ("Blocking waiting
+        // for file lock"), so the analyzer works in its own subdirectory.
+        cargo_config.target_dir_config = TargetDirectoryConfig::UseSubdirectory;
         cargo_config.extra_env.insert(
             "CARGO_NET_OFFLINE".to_owned(),
             (!config.allow_network).then(|| "true".to_owned()),

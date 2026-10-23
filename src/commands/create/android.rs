@@ -3,6 +3,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use super::escape_markup;
+
 /// Gradle distribution the bundled wrapper (`gradlew`, `gradle-wrapper.jar`)
 /// was generated from.
 ///
@@ -26,7 +28,11 @@ const GRADLE_DISTRIBUTION_SHA256: &str =
 /// applying it would clash with AGP's own `kotlin` extension.
 const ANDROID_GRADLE_PLUGIN_VERSION: &str = "9.3.1";
 
-pub fn create(dir: &Path, name: &str, group: &str) {
+/// Scaffold `builds/android/` for a new project.
+///
+/// `name` is the Cargo package and names the native library; `app_name` is the
+/// launcher label shown under the icon.
+pub fn create(dir: &Path, name: &str, app_name: &str, group: &str) {
     fs::create_dir_all(dir.join("builds/android/app/src/main/res/values")).unwrap();
     fs::create_dir_all(dir.join("builds/android/gradle/wrapper")).unwrap();
 
@@ -117,7 +123,7 @@ pub fn create(dir: &Path, name: &str, group: &str) {
         dir.join("builds/android/app/src/main/res/values/strings.xml"),
         format!(
             "<resources>\n    <string name=\"app_name\">{}</string>\n</resources>\n",
-            project_name
+            escape_markup(app_name)
         ),
     )
     .unwrap();
@@ -194,7 +200,7 @@ mod tests {
     /// directory to `assert`.
     fn with_scaffold(assert: impl FnOnce(&Path)) {
         let tmp = tempfile::tempdir().unwrap();
-        create(tmp.path(), "demo-app", "com.example.demo");
+        create(tmp.path(), "demo-app", "Demo App", "com.example.demo");
         assert(&tmp.path().join("builds/android"));
     }
 

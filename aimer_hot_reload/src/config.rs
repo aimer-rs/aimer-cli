@@ -496,10 +496,12 @@ impl AimerManifest {
     }
 }
 
-/// Resolve the project package name for the given project directory.
+/// Resolve the application name for the given project directory.
 ///
-/// Prefers `aimer.toml`, falls back to a real TOML parse of `Cargo.toml`, and
-/// finally to [`DEFAULT_PACKAGE_NAME`].
+/// This is the user-facing name the bundle is shipped under. Prefers
+/// `aimer.toml`, falls back to a real TOML parse of `Cargo.toml`, and finally
+/// to [`DEFAULT_PACKAGE_NAME`]. Use [`resolve_cargo_package_name`] for anything
+/// cargo itself has to find, such as `--bin` or the compiled library.
 pub fn resolve_package_name(dir: &Path) -> String {
     if let Ok(Some(manifest)) = AimerManifest::load_from(dir)
         && !manifest.package.name.is_empty()
@@ -507,6 +509,21 @@ pub fn resolve_package_name(dir: &Path) -> String {
         return manifest.package.name;
     }
     parse_cargo_package_name(dir).unwrap_or_else(|| DEFAULT_PACKAGE_NAME.to_string())
+}
+
+/// Resolve the Cargo package name for the given project directory.
+///
+/// The application name in `aimer.toml` may be any display string, while the
+/// binary and library cargo produces are named after `Cargo.toml`. Prefers
+/// `Cargo.toml`, falls back to `aimer.toml`, and finally to
+/// [`DEFAULT_PACKAGE_NAME`].
+pub fn resolve_cargo_package_name(dir: &Path) -> String {
+    if let Some(name) = parse_cargo_package_name(dir)
+        && !name.is_empty()
+    {
+        return name;
+    }
+    resolve_package_name(dir)
 }
 
 /// Parse the `[package].name` field from `<dir>/Cargo.toml` using a real TOML
@@ -745,6 +762,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolve_package_name(dir.path()), "from_cargo");
+    }
+
+    #[test]
+    fn cargo_package_name_ignores_a_display_name_in_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"my_app\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        AimerManifest::new("My App", "0.1.0", "", "", "com.example.my_app")
+            .write_to(dir.path())
+            .unwrap();
+        assert_eq!(resolve_package_name(dir.path()), "My App");
+        assert_eq!(resolve_cargo_package_name(dir.path()), "my_app");
+    }
+
+    #[test]
+    fn cargo_package_name_falls_back_to_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        AimerManifest::new("from_manifest", "0.1.0", "", "", "com.example.app")
+            .write_to(dir.path())
+            .unwrap();
+        assert_eq!(resolve_cargo_package_name(dir.path()), "from_manifest");
     }
 
     #[test]

@@ -144,7 +144,7 @@ fn active_stage_status_uses_a_spinner_and_only_stage_timing() {
 
     let output = String::from_utf8(output).unwrap();
     let expected_label = "Compile".bright_cyan().bold().to_string();
-    let expected_navbar = "  ↑/↓ select · ⇧R hot-restart · ⏎ expand · ⇧Q quit"
+    let expected_navbar = "  ↑/↓ select · r restart · ⏎ expand · ⇧Q quit"
         .dimmed()
         .to_string();
     colored::control::unset_override();
@@ -195,8 +195,8 @@ fn hot_reload_control_is_hidden_when_hot_reload_is_disabled() {
     renderer.render(&session, 120).unwrap();
 
     let output = String::from_utf8(output).unwrap();
-    assert!(!output.contains("r hot-reload"));
-    assert!(output.contains("⇧R hot-restart"));
+    assert!(!output.contains("hot-reload"));
+    assert!(output.contains("r restart"));
 }
 
 #[test]
@@ -207,7 +207,7 @@ fn hot_reload_control_is_visible_when_hot_reload_is_enabled() {
     renderer.render(&session, 120).unwrap();
 
     let output = String::from_utf8(output).unwrap();
-    assert!(output.contains("r hot-reload"));
+    assert!(output.contains("^R hot-reload"));
 }
 
 #[test]
@@ -326,4 +326,212 @@ fn failed_stage_summary_and_details_are_appended_once() {
     let output = String::from_utf8(output).unwrap();
     assert_eq!(strip_ansi(&output).matches("✗ Compile").count(), 1);
     assert_eq!(output.matches("error: failed").count(), 1);
+}
+
+#[test]
+fn notices_are_shown_in_the_live_region_until_they_expire() {
+    let mut session = InlineSession::new(&device());
+    session.notice("Hot reload requested".to_string());
+    let mut output = Vec::new();
+    let mut renderer = InlineRenderer::new(&mut output);
+
+    renderer.render(&session, 120).unwrap();
+    let shown = String::from_utf8(output.clone()).unwrap();
+    assert!(shown.contains("Hot reload requested"));
+
+    let expired = Instant::now() + NOTICE_VISIBLE_FOR;
+    assert!(session.active_notice(expired).is_none());
+}
+
+#[test]
+fn durations_switch_to_minutes_after_one_minute() {
+    assert_eq!(format_duration(Duration::from_millis(250)), "250ms");
+    assert_eq!(format_duration(Duration::from_millis(1_500)), "1.5s");
+    assert_eq!(format_duration(Duration::from_secs(125)), "2m05s");
+}
+
+#[test]
+fn styled_live_rows_are_truncated_to_the_window_without_losing_their_reset() {
+    let line = "  ⠋ \x1b[1;96mCompile\x1b[0m 1.2s".to_string();
+
+    let fitted = truncate_styled(&line, 8);
+    assert_eq!(display_width(&fitted), 8);
+    assert!(fitted.contains('…'));
+    assert!(fitted.ends_with("\x1b[0m"));
+    assert_eq!(truncate_styled(&line, 120), line);
+}
+
+#[test]
+fn wide_characters_count_as_two_columns_when_sizing_rows() {
+    assert_eq!(physical_rows("你好你好", 4), 2);
+    assert_eq!(physical_rows("abcd", 4), 1);
+    assert_eq!(display_width(&truncate_styled("你好你好", 5)), 5);
+}
+
+#[test]
+fn live_rows_never_wrap_in_a_narrow_window() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Compiling(10));
+    let mut output = Vec::new();
+    let mut renderer = InlineRenderer::new(&mut output);
+
+    renderer.render(&session, 20).unwrap();
+
+    assert!(renderer.live_lines.iter().all(|line| physical_rows(line, 20) == 1));
+}
+
+#[test]
+fn clearing_the_live_region_also_erases_everything_below_it() {
+    let session = InlineSession::new(&device());
+    let mut output = Vec::new();
+    let mut renderer = InlineRenderer::new(&mut output);
+
+    renderer.render(&session, 120).unwrap();
+    let first_frame_end = renderer.writer.len();
+    renderer.render(&session, 60).unwrap();
+
+    let redraw = String::from_utf8_lossy(&renderer.writer[first_frame_end..]).into_owned();
+    assert!(redraw.contains("\r\x1b[J"));
+}
+
+#[test]
+fn build_lock_wait_names_the_cause_and_how_long_it_has_lasted() {
+    let mut session = InlineSession::new(&device());
+    session.apply_event(RunnerEvent::BuildLog(
+        "Blocking waiting for file lock on build directory".into(),
+    ));
+    let mut output = Vec::new();
+    let mut renderer = InlineRenderer::new(&mut output);
+
+    renderer.render(&session, 160).unwrap();
+
+    let frame = strip_ansi(&String::from_utf8(output).unwrap());
+    assert!(frame.contains("Blocking waiting for file lock on build directory · "));
+    assert!(frame.contains("another cargo process"));
+}
+
+fn stage_kinds(session: &InlineSession) -> Vec<StageKind> {
+    session
+        .stages
+        .stages()
+        .iter()
+        .map(|stage| stage.kind().clone())
+        .collect()
+}
+
+fn live_frame(session: &InlineSession) -> String {
+    let mut output = Vec::new();
+    InlineRenderer::new(&mut output)
+        .render(session, 120)
+        .unwrap();
+    strip_ansi(&String::from_utf8(output).unwrap())
+}
+
+#[test]
+fn cargo_preparation_phases_are_their_own_stages_in_order() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Compiling(0));
+    session.apply_status(Status::Locking);
+    session.apply_status(Status::Fetching(10));
+    session.apply_status(Status::Downloading(0));
+    session.apply_status(Status::Downloading(40));
+    session.apply_status(Status::Compiling(5));
+
+    // The empty compile stage that opened the build became the first phase.
+    assert_eq!(
+        stage_kinds(&session),
+        vec![
+            StageKind::Locking,
+            StageKind::Fetching,
+            StageKind::Downloading,
+            StageKind::Compile
+        ]
+    );
+    let statuses: Vec<_> = session.stages.stages().iter().map(|s| s.status()).collect();
+    assert_eq!(
+        statuses,
+        vec![
+            StageStatus::Succeeded,
+            StageStatus::Succeeded,
+            StageStatus::Succeeded,
+            StageStatus::Running
+        ]
+    );
+}
+
+#[test]
+fn a_build_without_preparation_phases_keeps_a_single_compile_stage() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Compiling(0));
+    session.apply_status(Status::Compiling(30));
+    session.apply_status(Status::Compiling(100));
+
+    assert_eq!(stage_kinds(&session), vec![StageKind::Compile]);
+}
+
+#[test]
+fn a_compile_that_has_made_progress_is_not_turned_into_a_phase() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Compiling(20));
+    session.apply_status(Status::Fetching(1));
+
+    assert_eq!(
+        stage_kinds(&session),
+        vec![StageKind::Compile, StageKind::Fetching]
+    );
+}
+
+#[test]
+fn build_output_stays_with_the_preparation_phase_it_arrived_in() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Compiling(0));
+    session.apply_status(Status::Downloading(0));
+    session.apply_event(RunnerEvent::BuildLog("Downloaded serde v1.0".into()));
+
+    assert_eq!(stage_kinds(&session), vec![StageKind::Downloading]);
+    let stage = &session.stages.stages()[0];
+    assert!(
+        stage
+            .details()
+            .iter()
+            .any(|detail| detail.as_str().contains("Downloaded serde"))
+    );
+}
+
+#[test]
+fn a_running_stage_shows_its_percentage_instead_of_its_duration() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Downloading(40));
+
+    let frame = live_frame(&session);
+    assert!(frame.contains("Downloading"));
+    assert!(frame.contains("40%"));
+    assert!(!frame.contains("ms"), "no duration while progress is known: {frame}");
+}
+
+#[test]
+fn a_stage_without_a_percentage_falls_back_to_its_duration() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Locking);
+
+    let frame = live_frame(&session);
+    assert!(frame.contains("Locking"));
+    assert!(frame.contains("ms") || frame.contains('s'));
+    assert!(!frame.contains('%'));
+}
+
+#[test]
+fn a_finished_stage_reports_its_duration_not_its_percentage() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Downloading(100));
+    session.apply_status(Status::Compiling(1));
+
+    let frame = live_frame(&session);
+    let summary = frame
+        .lines()
+        .find(|line| line.contains("✓ Downloading"))
+        .expect("the finished phase is committed to scrollback");
+    assert!(!summary.contains('%'), "{summary}");
+    assert!(summary.contains("ms") || summary.contains('s'), "{summary}");
+    assert!(frame.contains("Compile") && frame.contains("1%"));
 }

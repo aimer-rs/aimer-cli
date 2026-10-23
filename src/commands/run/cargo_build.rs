@@ -134,7 +134,10 @@ pub fn spawn_cargo_build(
         return None;
     }
 
-    let mut child = match cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+    let mut child = match cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn() {
         Ok(child) => child,
         Err(e) => {
             let label = match target {
@@ -204,8 +207,18 @@ pub fn stream_cargo_json(
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
         let mut report = ErrorReport::new();
+        // Cargo announces every unit it finishes, including the ones it found
+        // fresh, so counting them measures the walk through the dependency graph
+        // even when almost everything was already built.
+        let total_units = cargo_lock_package_count();
+        let mut finished_units: usize = 0;
         for l in reader.lines().map_while(Result::ok) {
             match CargoMessage::parse(&l) {
+                Some(CargoMessage::Artifact { .. }) => {
+                    finished_units += 1;
+                    let pct = compile_progress(finished_units, total_units);
+                    let _ = tx.send(RunnerEvent::StatusChange(Status::Compiling(pct)));
+                }
                 Some(CargoMessage::Diagnostic(diagnostic)) => {
                     report.record(&diagnostic);
                     for line in diagnostic.render_lines() {
@@ -214,8 +227,8 @@ pub fn stream_cargo_json(
                     // Cargo leaves a blank line between diagnostics.
                     let _ = tx.send(RunnerEvent::BuildLog(String::new()));
                 }
-                // Artifacts and the build outcome are bookkeeping; cargo already
-                // announced them on stderr.
+                // The build outcome is bookkeeping; cargo already announced it on
+                // stderr.
                 Some(_) => {}
                 None => {
                     let _ = tx.send(RunnerEvent::BuildLog(l));
@@ -256,8 +269,11 @@ pub fn stream_stderr_with_cargo_progress(
         // Resolved package count gives the compile progress a real denominator,
         // so the percentage tracks the build instead of sticking at 99%.
         let total_units = cargo_lock_package_count();
+        // Upper bound for the crates a build can download: those from a registry.
+        let total_downloads = cargo_lock_registry_count();
         let mut scraper = RenderedDiagnostics::new();
         let mut fetch_count = 0;
+        let mut download_count: usize = 0;
         let mut compile_count: usize = 0;
         for l in reader.lines().map_while(Result::ok) {
             if collect_diagnostics {
@@ -265,16 +281,31 @@ pub fn stream_stderr_with_cargo_progress(
             }
             if l.contains("Locking") || l.contains("Updating") {
                 let _ = tx.send(RunnerEvent::StatusChange(Status::Locking));
-            } else if l.contains("Fetching")
-                || l.contains("Downloading")
-                || l.contains("Downloaded")
-            {
+            } else if l.contains("Fetching") {
                 fetch_count = (fetch_count + 1).min(99);
                 let _ = tx.send(RunnerEvent::StatusChange(Status::Fetching(fetch_count)));
+            } else if l.contains("Downloading") || l.contains("Downloaded") {
+                // `Downloading crates ...` opens the phase, each `Downloaded <crate>`
+                // is one finished download, and a closing `Downloaded N crates`
+                // summary ends it.
+                let pct = if is_download_summary(&l) {
+                    100
+                } else {
+                    if l.contains("Downloaded") {
+                        download_count += 1;
+                    }
+                    download_progress(download_count, total_downloads)
+                };
+                let _ = tx.send(RunnerEvent::StatusChange(Status::Downloading(pct)));
             } else if l.contains("Compiling") {
-                compile_count += 1;
-                let pct = compile_progress(compile_count, total_units);
-                let _ = tx.send(RunnerEvent::StatusChange(Status::Compiling(pct)));
+                // When cargo speaks JSON, its stdout counts finished units, fresh
+                // ones included, which tracks the build far better than the
+                // handful of crates that print a `Compiling` line.
+                if collect_diagnostics {
+                    compile_count += 1;
+                    let pct = compile_progress(compile_count, total_units);
+                    let _ = tx.send(RunnerEvent::StatusChange(Status::Compiling(pct)));
+                }
             } else if l.contains("Finished") {
                 let _ = tx.send(RunnerEvent::StatusChange(Status::Compiling(100)));
             }
@@ -290,22 +321,50 @@ pub fn stream_stderr_with_cargo_progress(
 /// lock file and returns 0 when it can't be located, in which case the caller
 /// falls back to an asymptotic estimate.
 fn cargo_lock_package_count() -> usize {
-    fn count(path: &std::path::Path) -> Option<usize> {
-        let contents = std::fs::read_to_string(path).ok()?;
-        let n = contents
-            .lines()
-            .filter(|l| l.trim() == "[[package]]")
-            .count();
-        if n > 0 { Some(n) } else { None }
-    }
+    read_cargo_lock().map_or(0, |lock| {
+        lock.lines().filter(|l| l.trim() == "[[package]]").count()
+    })
+}
+
+/// Count the packages in `Cargo.lock` that come from a registry, the only ones
+/// a build can download. Returns 0 when the lock file can't be located.
+fn cargo_lock_registry_count() -> usize {
+    read_cargo_lock().map_or(0, |lock| {
+        lock.lines()
+            .filter(|l| l.trim_start().starts_with("source = \"registry+"))
+            .count()
+    })
+}
+
+/// The contents of the nearest `Cargo.lock` that lists packages, searching
+/// upward from the current directory.
+fn read_cargo_lock() -> Option<String> {
     let mut dir = std::env::current_dir().ok();
     while let Some(d) = dir {
-        if let Some(n) = count(&d.join("Cargo.lock")) {
-            return n;
+        if let Ok(contents) = std::fs::read_to_string(d.join("Cargo.lock"))
+            && contents.contains("[[package]]")
+        {
+            return Some(contents);
         }
         dir = d.parent().map(|p| p.to_path_buf());
     }
-    0
+    None
+}
+
+/// Whether `line` is cargo's closing `Downloaded 12 crates (3.4MiB) in 2.1s`
+/// summary rather than the notice for a single crate.
+fn is_download_summary(line: &str) -> bool {
+    line.trim_start()
+        .strip_prefix("Downloaded ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .is_some_and(|word| word.parse::<usize>().is_ok())
+}
+
+/// Map a number of downloaded crates to a 0–99 percentage; the closing summary
+/// sets 100. `total` is an upper bound, so the value climbs smoothly instead of
+/// sticking when fewer crates than that need downloading.
+fn download_progress(downloaded: usize, total: usize) -> u8 {
+    compile_progress(downloaded, total)
 }
 
 /// Map a number of compiled crates to a 0–99 percentage.
@@ -647,6 +706,8 @@ mod tests {
         while let Ok(event) = rx.try_recv() {
             match event {
                 RunnerEvent::BuildLog(line) => lines.push(strip_ansi(&line)),
+                // Progress is checked on its own; this helper is about the log.
+                RunnerEvent::StatusChange(_) => {}
                 _ => panic!("expected a build log"),
             }
         }
@@ -843,6 +904,67 @@ mod tests {
         assert_eq!(compile_progress(1, 100), 1);
         assert_eq!(compile_progress(50, 100), 50);
         assert_eq!(compile_progress(99, 100), 99);
+    }
+
+    #[test]
+    fn finished_units_advance_the_compile_percentage_even_when_fresh() {
+        let artifact = |name: &str| {
+            format!(
+                r#"{{"reason":"compiler-artifact","target":{{"name":"{name}","kind":["lib"]}},"fresh":true}}"#
+            )
+        };
+        let input = format!("{}\n{}\n{}\n", artifact("a"), artifact("b"), artifact("c"));
+        let (tx, rx) = crossbeam::channel::unbounded();
+
+        stream_cargo_json(Cursor::new(input), tx).join().unwrap();
+
+        let percentages: Vec<u8> = rx
+            .try_iter()
+            .filter_map(|event| match event {
+                RunnerEvent::StatusChange(Status::Compiling(pct)) => Some(pct),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(percentages.len(), 3, "one update per finished unit");
+        assert!(percentages.windows(2).all(|pair| pair[0] <= pair[1]));
+        assert!(percentages.iter().all(|pct| *pct <= 99));
+    }
+
+    #[test]
+    fn a_download_summary_is_told_apart_from_a_single_crate() {
+        assert!(is_download_summary(
+            "  Downloaded 12 crates (3.4MiB) in 2.1s"
+        ));
+        assert!(!is_download_summary("  Downloaded serde v1.0.228"));
+        assert!(!is_download_summary("  Downloading crates ..."));
+    }
+
+    #[test]
+    fn download_progress_follows_the_registry_package_count() {
+        assert_eq!(download_progress(0, 200), 0);
+        assert_eq!(download_progress(50, 200), 25);
+        assert_eq!(download_progress(500, 200), 99);
+    }
+
+    #[test]
+    fn cargo_reports_downloads_as_their_own_status() {
+        let (tx, rx) = crossbeam::channel::unbounded();
+        let stderr = std::io::Cursor::new(
+            "Downloading crates ...\n Downloaded serde v1.0.228\n Downloaded 1 crates (10KiB) in 1s\n",
+        );
+
+        stream_stderr_with_cargo_progress(stderr, tx, false).join().unwrap();
+
+        let statuses: Vec<Status> = rx
+            .try_iter()
+            .filter_map(|event| match event {
+                RunnerEvent::StatusChange(status) => Some(status),
+                _ => None,
+            })
+            .collect();
+        assert!(matches!(statuses.first(), Some(Status::Downloading(0))));
+        assert_eq!(statuses.last(), Some(&Status::Downloading(100)));
+        assert!(!statuses.iter().any(|s| matches!(s, Status::Fetching(_))));
     }
 
     #[test]

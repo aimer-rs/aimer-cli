@@ -58,7 +58,9 @@ fn parse_toolchain_selector(value: &str) -> Result<ToolchainSelector, String> {
 enum UnstableFeature {
     #[value(name = "hot-reload")]
     WasmHotReload,
-    #[value(name = "inline-render")]
+    /// Inline rendering is stable and the default; the flag is only accepted so
+    /// existing scripts keep working.
+    #[value(name = "inline-render", hide = true)]
     InlineRender,
 }
 
@@ -79,7 +81,13 @@ impl Cli {
             _ => None,
         };
 
+        if matches!(unstable, Some(UnstableFeature::InlineRender)) && self.run_uses_full_screen() {
+            anyhow::bail!("'--tui' cannot be combined with '-Z inline-render'");
+        }
+
         match (self.toolchain, unstable) {
+            // Inline rendering graduated from the unstable set: it needs no selector.
+            (_, Some(UnstableFeature::InlineRender)) => Ok(()),
             (Some(ToolchainSelector::Nightly), Some(_)) | (None, None) => Ok(()),
             (None, Some(feature)) => anyhow::bail!(
                 "'-Z {}' requires the nightly selector; use 'aimer +nightly run -Z {}'",
@@ -90,6 +98,10 @@ impl Cli {
                 "'+nightly' is reserved for unstable Aimer features; use 'aimer +nightly run -Z hot-reload'"
             ),
         }
+    }
+
+    fn run_uses_full_screen(&self) -> bool {
+        matches!(self.command, Some(Commands::Run { tui: true, .. }))
     }
 
     fn execution_policy(&self) -> anyhow::Result<Option<ExecutionPolicy>> {
@@ -184,11 +196,14 @@ enum Commands {
         /// Select an Aimer package in the Cargo workspace.
         #[arg(short, long)]
         package: Option<String>,
-        /// Disable the interactive TUI and print logs to stdout/stderr instead.
+        /// Print plain logs to stdout/stderr instead of the interactive console.
         /// Useful when running from an IDE or CI where no terminal is
         /// available.
         #[arg(long)]
         no_tui: bool,
+        /// Use the full-screen TUI console instead of the default inline one.
+        #[arg(long, conflicts_with = "no_tui")]
+        tui: bool,
         /// Build, package and launch with the release profile
         #[arg(short, long)]
         release: bool,
@@ -204,6 +219,7 @@ enum Commands {
     },
 
     /// Expose a running Aimer session as an MCP server over stdio.
+    #[cfg(feature = "mcp")]
     Mcp {
         /// Install the Aimer MCP server for one or more supported agents.
         #[arg(
@@ -344,12 +360,18 @@ fn main() -> anyhow::Result<()> {
             device,
             package,
             no_tui,
+            tui,
             release: _,
             unstable,
             verbose_widget_ir,
             no_mcp,
         }) => {
             let policy = execution_policy.expect("run commands always resolve an execution policy");
+            if matches!(unstable, Some(UnstableFeature::InlineRender)) {
+                eprintln!(
+                    "note: the inline console is now the default; '-Z inline-render' is no longer needed"
+                );
+            }
             commands::run::execute_with_package(
                 target.map(|t| t.to_string()),
                 device.clone(),
@@ -357,10 +379,11 @@ fn main() -> anyhow::Result<()> {
                 *no_tui,
                 policy,
                 *verbose_widget_ir,
-                matches!(unstable, Some(UnstableFeature::InlineRender)),
+                *tui,
                 *no_mcp,
             )?;
         }
+        #[cfg(feature = "mcp")]
         Some(Commands::Mcp {
             project,
             attach,
@@ -408,7 +431,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Commands::Sessions { project, json }) => {
-            commands::mcp::list_sessions(project.clone(), *json)?;
+            commands::sessions::list_sessions(project.clone(), *json)?;
         }
         Some(Commands::Build {
             target,
@@ -563,6 +586,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn mcp_project_and_exact_attach_are_mutually_exclusive() {
         assert!(
@@ -571,6 +595,7 @@ mod tests {
         assert!(Cli::try_parse_from(["aimer", "mcp", "--attach", "abc"]).is_ok());
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn mcp_global_install_accepts_multiple_agents() {
         let cli = Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "claude", "--global"])
@@ -586,11 +611,13 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn mcp_global_flag_requires_install() {
         assert!(Cli::try_parse_from(["aimer", "mcp", "--global"]).is_err());
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
     fn mcp_install_rejects_global_project_and_exact_attach_combinations() {
         assert!(
@@ -620,12 +647,47 @@ mod tests {
     }
 
     #[test]
-    fn inline_render_requires_the_nightly_selector() {
+    fn inline_render_flag_needs_no_nightly_selector() {
         let cli = Cli::try_parse_from(["aimer", "run", "-Z", "inline-render"]).unwrap();
 
+        assert!(cli.validate_unstable_invocation().is_ok());
+        let policy = cli.execution_policy().unwrap().unwrap();
+        assert_eq!(policy.runtime(), ApplicationRuntime::NativeAot);
+    }
+
+    #[test]
+    fn run_defaults_to_the_inline_console() {
+        let cli = Cli::try_parse_from(["aimer", "run"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run {
+                tui: false,
+                no_tui: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tui_flag_selects_the_full_screen_console() {
+        let cli = Cli::try_parse_from(["aimer", "run", "--tui"]).unwrap();
+
+        assert!(matches!(cli.command, Some(Commands::Run { tui: true, .. })));
+        assert!(cli.validate_unstable_invocation().is_ok());
+    }
+
+    #[test]
+    fn tui_and_no_tui_are_mutually_exclusive() {
+        assert!(Cli::try_parse_from(["aimer", "run", "--tui", "--no-tui"]).is_err());
+    }
+
+    #[test]
+    fn tui_cannot_be_combined_with_the_inline_render_flag() {
+        let cli = Cli::try_parse_from(["aimer", "run", "--tui", "-Z", "inline-render"]).unwrap();
+
         let error = cli.validate_unstable_invocation().unwrap_err().to_string();
-        assert!(error.contains("+nightly"));
-        assert!(error.contains("aimer +nightly run -Z inline-render"));
+        assert!(error.contains("--tui"));
     }
 
     #[test]

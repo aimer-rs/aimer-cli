@@ -7,15 +7,16 @@ use std::path::Path;
 /// [`package_desktop`](crate::commands::assemble::package_desktop), which copies
 /// them into the portable bundle next to the executable: the entry is named
 /// after the project so it matches the binary cargo produces, and its `Exec`
-/// and `Icon` keys are rewritten to the bundled names on the way.
-pub fn create(dir: &Path, name: &str, _group: &str) {
+/// and `Icon` keys are rewritten to the bundled names on the way. `app_name` is
+/// the label desktops show for the entry.
+pub fn create(dir: &Path, name: &str, app_name: &str, _group: &str) {
     fs::create_dir_all(dir.join("builds/linux")).unwrap();
     fs::write(
         dir.join(format!("builds/linux/{name}.desktop")),
         format!(
             r#"[Desktop Entry]
-Name={name}
-Comment={name}
+Name={app_name}
+Comment={app_name}
 Exec={name}
 Icon={name}
 Terminal=false
@@ -41,11 +42,12 @@ mod tests {
     #[test]
     fn the_desktop_entry_is_named_after_the_project() {
         let dir = tempfile::tempdir().unwrap();
-        create(dir.path(), "my_app", "com.example");
+        create(dir.path(), "my_app", "My App", "com.example");
 
         let entry = dir.path().join("builds/linux/my_app.desktop");
         assert!(entry.is_file());
         let contents = std::fs::read_to_string(entry).unwrap();
+        assert!(contents.contains("Name=My App"), "{contents}");
         assert!(contents.contains("Exec=my_app"), "{contents}");
         assert!(contents.contains("Icon=my_app"), "{contents}");
         assert!(!contents.contains("aimer_app"), "{contents}");

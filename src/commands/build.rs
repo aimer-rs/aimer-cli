@@ -5,7 +5,7 @@ use anyhow::{Context, bail};
 
 use crate::commands::assemble::ensure_host_desktop;
 use crate::commands::run::web::{configure_trunk, find_llvm_ar};
-use crate::config::{AimerManifest, resolve_package_name};
+use crate::config::{AimerManifest, resolve_cargo_package_name};
 use crate::errors::AimerError;
 use crate::targets::Targets;
 
@@ -130,7 +130,7 @@ fn build_command(target: Targets, release: bool) -> anyhow::Result<Command> {
             ensure_host_desktop(target)?;
             let mut c = Command::new("cargo");
             c.arg("build")
-                .args(["--bin", &resolve_package_name(Path::new("."))]);
+                .args(["--bin", &resolve_cargo_package_name(Path::new("."))]);
             if release {
                 c.arg("--release");
             }

@@ -14,6 +14,8 @@ pub const MAX_LINES: usize = 32768;
 pub enum Status {
     Locking,
     Fetching(u8),
+    /// Crates being downloaded from a registry, as a 0–100 percentage.
+    Downloading(u8),
     Compiling(u8),
     Building(u8),
     Launching,

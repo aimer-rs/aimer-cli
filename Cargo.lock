@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aimer_cli"
-version = "0.8.1+1"
+version = "0.9.1"
 dependencies = [
  "aimer_hot_reload",
  "aimer_reload_protocol",
@@ -42,6 +42,7 @@ dependencies = [
  "ide",
  "ide-db",
  "inquire",
+ "libc",
  "load-cargo",
  "notify 9.0.0-rc.5",
  "proc-macro-api",
@@ -67,6 +68,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-ident",
  "unicode-properties",
+ "unicode-width",
  "uuid",
  "vfs",
  "walrus",

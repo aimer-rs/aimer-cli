@@ -22,9 +22,9 @@ pub enum ConsolePane {
 pub enum ConsoleAction {
     /// Exit the running console session.
     Quit,
-    /// Request an in-place hot reload of the running application.
+    /// Request an in-place hot reload of the running application (`Ctrl+R`).
     HotReload,
-    /// Request a full stop, rebuild, and relaunch of the application.
+    /// Request a full stop, rebuild, and relaunch of the application (`r`/`R`).
     HotRestart,
     /// Select a numbered console pane.
     SelectPane(ConsolePane),
@@ -74,15 +74,12 @@ pub fn map_key_event(key: &KeyEvent) -> Option<ConsoleAction> {
     let modifiers = key.modifiers;
 
     match key.code {
-        // A shifted `r` can arrive as either `Char('r') + SHIFT` or an
-        // uppercase character with SHIFT, depending on terminal encoding.
-        KeyCode::Char('r') if modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(ConsoleAction::HotRestart)
+        // `r` and `R` both restart, whatever the terminal reports for Shift.
+        // Ctrl+R keeps the in-place hot reload reachable.
+        KeyCode::Char('r' | 'R') if modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(ConsoleAction::HotReload)
         }
-        KeyCode::Char('R') if modifiers.contains(KeyModifiers::SHIFT) => {
-            Some(ConsoleAction::HotRestart)
-        }
-        KeyCode::Char('r') => Some(ConsoleAction::HotReload),
+        KeyCode::Char('r' | 'R') => Some(ConsoleAction::HotRestart),
 
         // Keep both forms used by terminals for Shift+Q. The uppercase event
         // is intentionally accepted even when the modifier bit is absent.
@@ -139,14 +136,21 @@ mod tests {
     }
 
     #[test]
-    fn lower_r_reloads_and_shifted_upper_r_restarts() {
+    fn r_in_either_case_restarts_and_ctrl_r_reloads() {
+        for (code, modifiers) in [
+            (KeyCode::Char('r'), KeyModifiers::NONE),
+            (KeyCode::Char('R'), KeyModifiers::NONE),
+            (KeyCode::Char('R'), KeyModifiers::SHIFT),
+            (KeyCode::Char('r'), KeyModifiers::SHIFT),
+        ] {
+            assert_eq!(
+                map_key_event(&key(code, modifiers)),
+                Some(ConsoleAction::HotRestart),
+            );
+        }
         assert_eq!(
-            map_key_event(&key(KeyCode::Char('r'), KeyModifiers::NONE)),
+            map_key_event(&key(KeyCode::Char('r'), KeyModifiers::CONTROL)),
             Some(ConsoleAction::HotReload),
-        );
-        assert_eq!(
-            map_key_event(&key(KeyCode::Char('R'), KeyModifiers::SHIFT)),
-            Some(ConsoleAction::HotRestart),
         );
     }
 
@@ -258,7 +262,7 @@ mod tests {
                 KeyModifiers::NONE,
                 KeyEventKind::Repeat,
             )),
-            Some(ConsoleAction::HotReload),
+            Some(ConsoleAction::HotRestart),
         );
         assert_eq!(
             map_key_event(&key_with_kind(

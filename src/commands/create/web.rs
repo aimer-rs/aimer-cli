@@ -1,8 +1,12 @@
 use std::fs;
 use std::path::Path;
 
-pub fn create(dir: &Path, name: &str, _group: &str) {
-    let project_name = name;
+use super::escape_markup;
+
+/// Scaffold `builds/web/` for a new project.
+///
+/// `name` is the Cargo package Trunk builds; `app_name` is the page title.
+pub fn create(dir: &Path, name: &str, app_name: &str, _group: &str) {
     let web_dir = dir.join("builds/web");
     fs::create_dir_all(&web_dir).unwrap();
 
@@ -17,7 +21,7 @@ pub fn create(dir: &Path, name: &str, _group: &str) {
     fs::write(
         web_dir.join("index.html"),
         include_str!("../../../templates/web/index.html.template")
-            .replace("${app_title}", project_name)
+            .replace("${app_title}", &escape_markup(app_name))
             .replace("${bin_name}", name),
     )
     .unwrap();
@@ -45,7 +49,7 @@ mod tests {
         let dir = tmp.path().join("test-app");
         fs::create_dir_all(&dir).unwrap();
 
-        create(&dir, "test-app", "com.example.test");
+        create(&dir, "test-app", "Test App", "com.example.test");
 
         let web_dir = dir.join("builds/web");
         assert!(web_dir.join("Trunk.toml").exists(), "missing Trunk.toml");
@@ -77,8 +81,12 @@ mod tests {
             "index.html missing data-trunk attribute"
         );
         assert!(
-            html.contains("test-app"),
-            "index.html missing project name in title"
+            html.contains("<title>Test App</title>"),
+            "index.html missing app name in title"
+        );
+        assert!(
+            html.contains("data-bin=\"test-app\""),
+            "index.html missing the Cargo package as the Trunk bin"
         );
         assert!(
             html.contains("id=\"aimer_app\""),

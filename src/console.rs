@@ -10,14 +10,14 @@ pub mod ui;
 use std::fs::File;
 use std::io::{Write, stdout};
 use std::net::{IpAddr, Ipv4Addr};
-use std::process::Child;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use self::inspector::InspectorServer;
 use crate::commands::run::Device;
-use crate::commands::run::pipeline::{self, RunContext};
+use crate::commands::run::pipeline::{self, RunContext, RunnerHandle};
 use crate::commands::run::utilities::{LogStyling, get_project_root};
 use crate::session::{LogStream, SessionCommand, SessionHandle, SessionStatus};
 use crate::targets::Targets;
@@ -42,9 +42,10 @@ fn spawn_runner(
     inspector_port: u16,
     release: bool,
     session: Option<SessionHandle>,
-) -> Arc<Mutex<Option<Child>>> {
+) -> RunnerHandle {
     let current_child = Arc::new(Mutex::new(None));
     let current_child_clone = Arc::clone(&current_child);
+    let cancelled = Arc::new(AtomicBool::new(false));
     let target = device.target;
 
     match pipeline::runner_for(target) {
@@ -58,6 +59,7 @@ fn spawn_runner(
                 inspector_port,
                 release,
                 session: session.map(|session| session.scoped()),
+                cancelled: Arc::clone(&cancelled),
             };
             thread::spawn(move || pipeline::drive(runner, ctx));
         }
@@ -70,7 +72,7 @@ fn spawn_runner(
         }
     }
 
-    current_child
+    RunnerHandle::new(current_child, cancelled)
 }
 
 pub(crate) fn observe_session_event(session: Option<&SessionHandle>, event: &RunnerEvent) {
@@ -99,7 +101,7 @@ pub(crate) fn observe_session_event(session: Option<&SessionHandle>, event: &Run
         RunnerEvent::StatusChange(status) => {
             let status = match status {
                 Status::Locking => SessionStatus::Locking,
-                Status::Fetching(_) => SessionStatus::Fetching,
+                Status::Fetching(_) | Status::Downloading(_) => SessionStatus::Fetching,
                 Status::Compiling(_) => SessionStatus::Compiling,
                 Status::Building(_) => SessionStatus::Building,
                 Status::Launching => SessionStatus::Launching,
@@ -150,7 +152,7 @@ fn progress_sequence(status: &Status) -> String {
         // Indeterminate spinner while resolving deps / launching (no concrete %).
         Status::Locking | Status::Launching => "\x1b]9;4;3;\x1b\\".to_string(),
         // Determinate progress for the build phases.
-        Status::Fetching(p) | Status::Compiling(p) | Status::Building(p) => {
+        Status::Fetching(p) | Status::Downloading(p) | Status::Compiling(p) | Status::Building(p) => {
             format!("\x1b]9;4;1;{}\x1b\\", p)
         }
         // Error state paints the bar red.
@@ -286,9 +288,7 @@ pub fn start(
     // };
 
     let Ok(proj_root) = get_project_root(false) else {
-        if let Some(mut child) = current_child.lock().unwrap().take() {
-            let _ = child.kill();
-        }
+        current_child.stop();
         return Err(anyhow::anyhow!("Failed to get project root"));
     };
 
@@ -319,9 +319,7 @@ pub fn start(
                     {
                         continue;
                     }
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
                     state.status = Status::Compiling(0);
                     current_child = spawn_runner(
                         device.clone(),
@@ -334,9 +332,7 @@ pub fn start(
                     );
                 }
                 SessionCommand::Stop { reply } => {
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
                     session
                         .as_ref()
                         .expect("session command requires a session")
@@ -383,9 +379,7 @@ pub fn start(
                                 state.status = Status::Compiling(0);
                                 pipeline::spawn_wasm_pack(tx.clone(), release);
                             } else {
-                                if let Some(mut child) = current_child.lock().unwrap().take() {
-                                    let _ = child.kill();
-                                }
+                                current_child.stop();
                                 state.clear_build();
                                 state.clear_app();
                                 state.status = Status::Compiling(0);
@@ -462,9 +456,7 @@ pub fn start(
                         }
                         (KeyCode::Char('Q'), _) | (KeyCode::Char('q'), KeyModifiers::SHIFT) => {
                             // Kill child process if any
-                            if let Some(mut child) = current_child.lock().unwrap().take() {
-                                let _ = child.kill();
-                            }
+                            current_child.stop();
                             quit = true;
                         }
                         (KeyCode::Char('r'), _) => {
@@ -478,9 +470,7 @@ pub fn start(
                                     continue;
                                 }
                                 // Kill child process if running
-                                if let Some(mut child) = current_child.lock().unwrap().take() {
-                                    let _ = child.kill();
-                                }
+                                current_child.stop();
                                 state.clear_build();
                                 state.clear_app();
                                 state.status = Status::Compiling(0);
@@ -792,9 +782,7 @@ pub fn start_no_tui(
                     {
                         continue;
                     }
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
                     current_child = spawn_runner(
                         device.clone(),
                         pkg_name.clone(),
@@ -806,9 +794,7 @@ pub fn start_no_tui(
                     );
                 }
                 SessionCommand::Stop { reply } => {
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
                     session
                         .as_ref()
                         .expect("session command requires a session")
@@ -856,7 +842,9 @@ pub fn start_no_tui(
             RunnerEvent::StatusChange(status) => match &status {
                 Status::Compiling(pct) => eprintln!("[status] Compiling {}%", pct),
                 Status::Building(pct) => eprintln!("[status] Building {}%", pct),
-                Status::Fetching(pct) => eprintln!("[status] Fetching {}%", pct),
+                Status::Fetching(pct) | Status::Downloading(pct) => {
+                    eprintln!("[status] Fetching {}%", pct)
+                }
                 Status::Launching => eprintln!("[status] Launching..."),
                 Status::Running => eprintln!("[status] Running"),
                 Status::Error => eprintln!("[status] Error"),
@@ -868,9 +856,7 @@ pub fn start_no_tui(
                 if device.target == Targets::Web {
                     pipeline::spawn_wasm_pack(tx.clone(), release);
                 } else {
-                    if let Some(mut child) = current_child.lock().unwrap().take() {
-                        let _ = child.kill();
-                    }
+                    current_child.stop();
                     current_child = spawn_runner(
                         device.clone(),
                         pkg_name.clone(),

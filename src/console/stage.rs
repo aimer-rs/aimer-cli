@@ -16,6 +16,12 @@ impl StageId {
 /// The semantic kind of work represented by a stage.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum StageKind {
+    /// Resolve the dependency graph and write the lock file.
+    Locking,
+    /// Update registry indexes and git dependencies.
+    Fetching,
+    /// Download crates from a registry.
+    Downloading,
     /// Resolve and compile the application.
     Compile,
     /// Assemble the compiled application into its launchable form.
@@ -35,9 +41,18 @@ pub enum StageKind {
 }
 
 impl StageKind {
+    /// Whether this is one of the phases that cargo runs before it compiles.
+    #[inline]
+    pub fn is_preparation(&self) -> bool {
+        matches!(self, Self::Locking | Self::Fetching | Self::Downloading)
+    }
+
     /// Return the compact label shown in a stage summary.
     pub fn label(&self) -> &str {
         match self {
+            Self::Locking => "Locking",
+            Self::Fetching => "Fetching",
+            Self::Downloading => "Downloading",
             Self::Compile => "Compile",
             Self::Assemble => "Assemble",
             Self::Package => "Package",
@@ -298,6 +313,19 @@ impl StageBook {
             return Err(StageError::AlreadyFinished(id));
         }
         stage.progress = progress;
+        Ok(())
+    }
+
+    /// Change what a running stage is working on, keeping its timing and details.
+    ///
+    /// Progress is cleared because it described the previous kind of work.
+    pub fn retag(&mut self, id: StageId, kind: StageKind) -> Result<(), StageError> {
+        let stage = self.stage_mut(id)?;
+        if stage.status != StageStatus::Running {
+            return Err(StageError::AlreadyFinished(id));
+        }
+        stage.kind = kind;
+        stage.progress = None;
         Ok(())
     }
 

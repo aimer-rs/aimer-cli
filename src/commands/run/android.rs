@@ -249,6 +249,7 @@ impl AndroidRunner {
     fn clear_device_log(ctx: &RunContext) {
         let _ = Command::new("adb")
             .args(["-s", &ctx.device.id, "logcat", "-c"])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();

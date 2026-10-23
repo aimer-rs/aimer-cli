@@ -125,7 +125,23 @@ impl SystemRuntime for CliHotReloadRuntime {
                 } else {
                     "aarch64-apple-darwin"
                 };
-                command.args(["build", "--target", target, "--lib"]);
+                // `cargo rustc` so the compiler records the frameworks the
+                // crate graph links, which `package_macos_for_hot_reload`
+                // turns into the project's xcconfig.
+                let print_arg = assemble::link_flags::print_arg(target, false)
+                    .map_err(display_error)?;
+                command
+                    .args([
+                        "rustc",
+                        "--target",
+                        target,
+                        "--lib",
+                        "--features",
+                        aimer_cli::hot_reload::session::HOST_RELOAD_FEATURE,
+                        "--",
+                        "--print",
+                    ])
+                    .arg(print_arg);
             }
             TargetFamily::Windows | TargetFamily::Linux => {
                 command.args(["build", "--bin", package]);
@@ -155,7 +171,7 @@ impl SystemRuntime for CliHotReloadRuntime {
         }
         if !matches!(
             device.family(),
-            TargetFamily::IosSimulator | TargetFamily::IosDevice
+            TargetFamily::Macos | TargetFamily::IosSimulator | TargetFamily::IosDevice
         ) {
             command.args([
                 "--features",
@@ -208,7 +224,7 @@ impl SystemRuntime for CliHotReloadRuntime {
                 let app = assemble::package_macos_for_hot_reload(package, false, &reporter)
                     .map_err(display_error)?;
                 Ok(AssembledHost::DesktopExecutable(
-                    root.join(app).join(format!("Contents/MacOS/{package}")),
+                    root.join(assemble::macos_executable_path(&app, &assemble::app_name())),
                 ))
             }
             TargetFamily::IosSimulator | TargetFamily::IosDevice => {

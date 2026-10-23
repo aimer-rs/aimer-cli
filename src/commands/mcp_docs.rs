@@ -21,6 +21,7 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use reqwest::{Client, StatusCode, Url};
+#[cfg(feature = "mcp")]
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -30,7 +31,8 @@ const MAX_COMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct GetCrateDocsArguments {
     /// Cargo package name, for example `serde`, or a toolchain crate such as `std`, `core`, or `alloc`.
     pub(crate) crate_name: String,
@@ -47,7 +49,8 @@ pub struct GetCrateDocsArguments {
     pub(crate) refresh: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct SearchCrateDocsArguments {
     /// Cargo package name, for example `serde`, or a toolchain crate such as `std`, `core`, or `alloc`.
     pub(crate) crate_name: String,

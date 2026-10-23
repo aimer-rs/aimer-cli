@@ -3,7 +3,12 @@ use std::path::Path;
 
 use crate::commands::assemble::link_flags;
 
-pub fn create(dir: &Path, name: &str, group: &str) {
+/// Scaffold `builds/ios/` for a new project.
+///
+/// `name` is the Cargo package and names the Xcode project, target and source
+/// folder. The application name is not needed here: `Info.plist` reads it from
+/// `$(PRODUCT_NAME)`, which `aimer assemble` sets from `Aimer.toml`.
+pub fn create(dir: &Path, name: &str, _app_name: &str, group: &str) {
     let project_name = name;
     let project_name_lib = project_name.replace("-", "_");
     let ios_dir = dir.join("builds/ios");
@@ -23,7 +28,7 @@ pub fn create(dir: &Path, name: &str, group: &str) {
     // The project links whatever `RustLinkFlags.xcconfig` says; until the
     // first `aimer` build derives the real list from the crate graph, the
     // defaults keep an Xcode-only build working.
-    link_flags::scaffold(&ios_dir).unwrap();
+    link_flags::scaffold(&ios_dir, link_flags::DEFAULT_IOS_FLAGS).unwrap();
 
     let app_dir = ios_dir.join(project_name);
     fs::create_dir_all(&app_dir).unwrap();
@@ -31,7 +36,6 @@ pub fn create(dir: &Path, name: &str, group: &str) {
     fs::write(
         app_dir.join("Info.plist"),
         include_str!("../../../templates/ios/Info.plist.template")
-            .replace("${project_name}", project_name)
             .replace("${group}", group),
     )
     .unwrap();
@@ -188,7 +192,7 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        create(&dir, name, "com.example.app");
+        create(&dir, name, name, "com.example.app");
         dir
     }
 }

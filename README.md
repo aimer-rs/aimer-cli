@@ -134,16 +134,26 @@ rustup component add rustc-dev
 cargo install --path .
 ```
 
-The Rust MCP embeds the matching rust-analyzer IDE engine and, by default,
-bundles its matching proc-macro helper in the Aimer executable. The build
-compiles the helper with `RUSTC_BOOTSTRAP=1`; the active Rust toolchain must
-have the `rustc-dev` component installed:
+The default build is the lightweight CLI: it does not include the `aimer mcp`
+server, the embedded rust-analyzer engine, or the proc-macro helper, and it does
+not need `rustc-dev`. Opt in with Cargo features:
 
-At startup Aimer extracts the bundled helper into a private temporary
+| Feature | Adds |
+| --- | --- |
+| `mcp` | The `aimer mcp` server and the embedded rust-analyzer IDE engine. |
+| `bundled-proc-macro` | Everything in `mcp`, plus the matching proc-macro helper bundled in the executable. |
+| `legacy-lsp` | Everything in `mcp`, plus the legacy LSP-shaped MCP tools. |
+
+```bash
+rustup component add rustc-dev   # only needed for bundled-proc-macro
+cargo install --path . --features bundled-proc-macro
+```
+
+With `bundled-proc-macro`, the build compiles the helper with
+`RUSTC_BOOTSTRAP=1`, and at startup Aimer extracts it into a private temporary
 directory and launches it as a child process. No separate helper installation
-or `rust-analyzer` executable on `PATH` is needed. Builds made with
-`--no-default-features` can use a helper beside `aimer`, or a helper selected
-with `proc_macro_server_path`.
+or `rust-analyzer` executable on `PATH` is needed. Builds with only `mcp` can
+use a helper beside `aimer`, or a helper selected with `proc_macro_server_path`.
 
 Verify the installation:
 
@@ -180,7 +190,8 @@ aimer create my_aimer_app
 
 The interactive wizard will prompt you for:
 
-- **App name**: Display name of your application
+- **App name**: Display name of your application, stored as `package.name` in `Aimer.toml` and used as the bundled app
+  name (defaults to the project name)
 - **Description**: Short description
 - **Version**: Initial version (default: `0.1.0`)
 - **Author**: Your name or team
@@ -254,7 +265,10 @@ aimer create <PROJECT_NAME>
 
 ### `aimer run`
 
-Builds, packages, and executes the project with an interactive developer console.
+Builds, packages, and executes the project with an interactive developer console. By default the console is rendered
+inline: finished stages scroll into your terminal history while the active stage and a hotkey bar stay at the bottom.
+Use `--tui` for the full-screen console, or `--no-tui` for plain logs. When stdin or stdout is not a terminal (CI, an
+IDE run window, a pipe), `aimer run` prints plain logs automatically.
 
 ```bash
 aimer run [OPTIONS]
@@ -268,9 +282,10 @@ aimer run [OPTIONS]
 | `--device`            | `-d` | Target a specific device ID without prompting                                                      |
 | `--package`           | `-p` | Select an Aimer package in a Cargo workspace                                                       |
 | `--release`           | `-r` | Build and package with release optimizations                                                       |
-| `--no-tui`            |      | Disable the interactive terminal UI and stream plain logs to stdout/stderr (ideal for CI and IDEs) |
+| `--tui`               |      | Use the full-screen TUI console instead of the default inline console (conflicts with `--no-tui`)  |
+| `--no-tui`            |      | Disable the interactive console and stream plain logs to stdout/stderr (ideal for CI and IDEs)     |
 | `--no-mcp`            |      | Disable the background private MCP control session                                                 |
-| `-Z <FEATURE>`        |      | Enable nightly-only unstable features (`hot-reload`, `inline-render`)                              |
+| `-Z <FEATURE>`        |      | Enable nightly-only unstable features (`hot-reload`)                                               |
 | `--verbose-widget-ir` |      | Print every Widget IR stage after native materialization (requires `-Z`)                           |
 | `--verbose`           |      | Enable debug-level CLI logging                                                                     |
 
@@ -403,6 +418,8 @@ aimer completions <SHELL> [--install]
 ---
 
 ### `aimer mcp`
+
+> Requires a build with the `mcp` feature (or `bundled-proc-macro` / `legacy-lsp`, which imply it). See [Installation](#installation).
 
 Runs an MCP (Model Context Protocol) stdio server for Rust project tools and crate documentation. When the selected
 project is an Aimer project with a live session, it also exposes session controls, logs, and resource monitoring. The
@@ -548,7 +565,7 @@ proc_macro_server_path = "/path/to/rust-analyzer-proc-macro-srv"
 allow_network = false
 ```
 
-The embedded engine loads lazily when a Rust tool is first called, or explicitly through `start_lsp`. It updates indexed Rust files as they change and reloads the Cargo workspace after manifest, build-script, or source-structure changes. Procedural macros run in the bundled matching helper process; Aimer extracts it to a private temporary directory for the lifetime of the MCP process. Builds made with `--no-default-features` need a helper beside `aimer` or a configured `proc_macro_server_path`. `check` runs Clippy directly with all warnings denied; `cargo_check` and `cargo_test` run their corresponding Cargo commands; `cargo_run` builds and runs a binary or example in the foreground. These Cargo tools return bounded results and filter routine build progress; `cargo_run` also filters and counts Rust/build-script warnings. Code edits are returned as previews and are only written after `apply_edit`; stale previews are rejected. Manifest previews preserve existing TOML comments and formatting, and applying one schedules an embedded workspace reload on the next Rust request. Cargo commands run offline unless the network setting opts in. Existing docs.rs tools retain their separate network and cache behavior.
+The embedded engine loads lazily when a Rust tool is first called, or explicitly through `start_lsp`. It updates indexed Rust files as they change and reloads the Cargo workspace after manifest, build-script, or source-structure changes. Procedural macros run in the bundled matching helper process; Aimer extracts it to a private temporary directory for the lifetime of the MCP process. Builds without `bundled-proc-macro` need a helper beside `aimer` or a configured `proc_macro_server_path`. `check` runs Clippy directly with all warnings denied; `cargo_check` and `cargo_test` run their corresponding Cargo commands; `cargo_run` builds and runs a binary or example in the foreground. These Cargo tools return bounded results and filter routine build progress; `cargo_run` also filters and counts Rust/build-script warnings. Code edits are returned as previews and are only written after `apply_edit`; stale previews are rejected. Manifest previews preserve existing TOML comments and formatting, and applying one schedules an embedded workspace reload on the next Rust request. Cargo commands run offline unless the network setting opts in. Existing docs.rs tools retain their separate network and cache behavior.
 
 Range formatting uses rustfmt's unstable file-range support and invokes
 `rustup run nightly rustfmt`; whole-file formatting uses the toolchain's regular
@@ -606,7 +623,10 @@ preferences, and asset bundling.
 
 ```toml
 [package]
-name = "my_aimer_app"
+# Application name: the bundle is shipped under it (e.g. `My Aimer App.app`)
+# and it is the label shown under the launcher icon. It may contain spaces.
+# The Cargo package in `Cargo.toml` keeps the project name.
+name = "My Aimer App"
 version = "0.1.0"
 description = "A cross-platform GUI app built with Aimer"
 author = "Your Name <you@example.com>"
@@ -658,14 +678,12 @@ resources, web dist). The asset path declared in `Aimer.toml` serves as the runt
 Aimer features an experimental WebAssembly-based shadow hot reload pipeline that allows modifying widget code with
 near-instant UI updates while preserving widget state.
 
-To use unstable features, invoke `aimer` with the `+nightly` selector:
+To use unstable features, invoke `aimer` with the `+nightly` selector. The inline console is no longer one of them: it
+is the default for `aimer run`, and the old `-Z inline-render` flag is still accepted (with a note) but does nothing.
 
 ```bash
 # Run with WebAssembly hot-reload guest engine
 aimer +nightly run -Z hot-reload
-
-# Run with inline rendering
-aimer +nightly run -Z inline-render
 
 # Print detailed Widget Intermediate Representation (IR) stages
 aimer +nightly run -Z hot-reload --verbose-widget-ir

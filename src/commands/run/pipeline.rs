@@ -1,8 +1,11 @@
 use std::io::{BufRead, BufReader};
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crossbeam::channel::Sender;
 
@@ -35,6 +38,101 @@ pub struct RunContext {
     /// Optional control session for process identity publication and agent
     /// restart/stop commands.
     pub session: Option<SessionHandle>,
+    /// Set when the console has superseded this run (a restart or a quit).
+    /// [`drive`] stops at the next stage boundary instead of carrying on beside
+    /// the run that replaced it.
+    pub cancelled: Arc<AtomicBool>,
+}
+
+impl RunContext {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// Stop a superseded run: whatever it has spawned since the console last
+    /// killed its child must not outlive it.
+    fn abandon(&self) {
+        if let Some(child) = self.current_child.lock().unwrap().take() {
+            terminate(child);
+        }
+    }
+}
+
+/// The console's handle on a run started by `spawn_runner`.
+///
+/// It dereferences to the slot holding the run's current child process, so it
+/// can be used wherever that slot was. [`stop`](Self::stop) is the complete
+/// way to end the run: killing the child alone leaves the pipeline thread free
+/// to start its next stage next to the run that replaces it.
+pub struct RunnerHandle {
+    current_child: Arc<Mutex<Option<Child>>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl RunnerHandle {
+    pub(crate) fn new(current_child: Arc<Mutex<Option<Child>>>, cancelled: Arc<AtomicBool>) -> Self {
+        Self {
+            current_child,
+            cancelled,
+        }
+    }
+
+    /// Cancel the run and kill the process it currently has registered.
+    pub fn stop(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        if let Some(child) = self.current_child.lock().unwrap().take() {
+            terminate(child);
+        }
+    }
+}
+
+/// How long a child gets to exit after SIGTERM before it is killed outright.
+const TERMINATE_GRACE: Duration = Duration::from_secs(3);
+
+/// Stop `child` the way Ctrl-C in a terminal would, then reap it.
+///
+/// The process the console tracks is often only a client: `xcrun simctl launch`
+/// and `xcrun devicectl device process launch --console` run the app elsewhere
+/// and forward the signals they can catch to it. SIGKILL cannot be caught, so
+/// killing the client would leave the app running on the simulator or phone
+/// with its console gone, and the next launch would attach to that stale
+/// process instead of starting the new build. SIGTERM lets the client take the
+/// app down with it; SIGKILL is only the fallback.
+///
+/// The signal is sent before this returns. Waiting for the exit, escalating
+/// and reaping happen on a helper thread so a slow client cannot stall the
+/// console.
+pub(crate) fn terminate(mut child: Child) {
+    #[cfg(unix)]
+    {
+        // SAFETY: `kill(2)` only reads its arguments; the pid belongs to a
+        // child we have not yet reaped, so it cannot have been recycled.
+        let signalled = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } == 0;
+        if signalled {
+            thread::spawn(move || {
+                let deadline = Instant::now() + TERMINATE_GRACE;
+                while Instant::now() < deadline {
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            });
+            return;
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+impl Deref for RunnerHandle {
+    type Target = Mutex<Option<Child>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.current_child
+    }
 }
 
 /// One step of the unified run pipeline, in the order [`drive`] executes them.
@@ -124,9 +222,15 @@ pub trait Runner: Send {
 /// back to [`Status::Idling`].
 pub fn drive(mut runner: Box<dyn Runner>, ctx: RunContext) {
     for stage in Stage::ALL {
+        if ctx.is_cancelled() {
+            return ctx.abandon();
+        }
         if runner.stage(&ctx, stage) == Flow::Abort {
             return;
         }
+    }
+    if ctx.is_cancelled() {
+        return ctx.abandon();
     }
 
     set_status(&ctx.tx, Status::Running);
@@ -134,6 +238,9 @@ pub fn drive(mut runner: Box<dyn Runner>, ctx: RunContext) {
         session.set_status(crate::session::SessionStatus::Running, None);
     }
     wait_for_child(&ctx.current_child);
+    if ctx.is_cancelled() {
+        return;
+    }
     set_status(&ctx.tx, Status::Idling);
     if let Some(session) = &ctx.session {
         session.set_status(crate::session::SessionStatus::Idling, None);
@@ -175,6 +282,7 @@ pub fn spawn_wasm_pack(tx: Sender<RunnerEvent>, release: bool) {
             return;
         }
         let mut wasm_build = match command
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -307,6 +415,7 @@ mod tests {
             inspector_port: 0,
             release: false,
             session: None,
+            cancelled: Arc::new(AtomicBool::new(false)),
         };
         (ctx, rx)
     }
@@ -339,6 +448,76 @@ mod tests {
         drive(Box::new(runner), ctx);
 
         assert_eq!(statuses(&rx), vec![Status::Running, Status::Idling]);
+    }
+
+    #[cfg(unix)]
+    fn process_exists(pid: u32) -> bool {
+        // SAFETY: signal 0 only checks that the pid can be signalled.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+
+    #[cfg(unix)]
+    fn wait_until_gone(pid: u32, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        while Instant::now() < deadline {
+            if !process_exists(pid) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_stops_a_child_with_sigterm_and_reaps_it() {
+        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+
+        terminate(child);
+
+        // Gone entirely, not left as a zombie: the helper thread reaps it.
+        assert!(wait_until_gone(pid, Duration::from_secs(2)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_falls_back_to_sigkill_for_a_child_that_ignores_sigterm() {
+        let child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        thread::sleep(Duration::from_millis(300));
+
+        terminate(child);
+
+        assert!(process_exists(pid), "SIGTERM alone must not end this child");
+        assert!(wait_until_gone(pid, TERMINATE_GRACE + Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn drive_does_nothing_for_a_run_that_was_already_cancelled() {
+        let (runner, seen) = SpyRunner::new(None);
+        let (ctx, rx) = context();
+        ctx.cancelled.store(true, Ordering::SeqCst);
+
+        drive(Box::new(runner), ctx);
+
+        assert!(seen.lock().unwrap().is_empty());
+        assert!(statuses(&rx).is_empty());
+    }
+
+    #[test]
+    fn stopping_a_runner_handle_cancels_the_run() {
+        let child = Arc::new(Mutex::new(None));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let handle = RunnerHandle::new(Arc::clone(&child), Arc::clone(&cancelled));
+
+        handle.stop();
+
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(child.lock().unwrap().is_none());
     }
 
     #[test]

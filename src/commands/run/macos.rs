@@ -74,8 +74,8 @@ impl Runner for MacosRunner {
         let app_path = self
             .app_path
             .clone()
-            .unwrap_or_else(|| assemble::macos_app_path(&ctx.pkg_name, ctx.release));
-        let app_exec_path = format!("{}/Contents/MacOS/{}", app_path, ctx.pkg_name);
+            .unwrap_or_else(|| assemble::macos_app_path(&assemble::app_name(), ctx.release));
+        let app_exec_path = assemble::macos_executable_path(&app_path, &assemble::app_name());
 
         // Ask the app for machine readable logs: `aimer_utils::log` then writes one
         // JSON record per event, which the reader threads parse and the console

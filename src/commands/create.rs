@@ -65,7 +65,12 @@ pub fn execute(project_name: &str) -> anyhow::Result<()> {
     tracing::debug!("current_dir : {}", current_dir.display());
     println!("Creating project '{}'", project_name);
 
-    prompt_abortable!(Text::new("App name:"));
+    let app_name = prompt_abortable!(
+        Text::new("App name:")
+            .with_default(project_name)
+            .with_validator(validate_app_name_input)
+    );
+    let app_name = app_name.trim().to_string();
     let description = prompt_abortable!(Text::new("Description:"));
     let version = prompt_abortable!(Text::new("Version:").with_default("0.1.0"));
     let author = prompt_abortable!(Text::new("Author:"));
@@ -78,8 +83,8 @@ pub fn execute(project_name: &str) -> anyhow::Result<()> {
     ));
 
     println!(
-        "\nProject config:\n- Name: {}\n- Version: {}\n- Description: {}\n- Author: {}\n- Group: {}\n- Targets: {:?}",
-        project_name, version, description, author, group, targets
+        "\nProject config:\n- Name: {}\n- App name: {}\n- Version: {}\n- Description: {}\n- Author: {}\n- Group: {}\n- Targets: {:?}",
+        project_name, app_name, version, description, author, group, targets
     );
 
     if !prompt_abortable!(Confirm::new("Is this okay?").with_default(true)) {
@@ -98,6 +103,7 @@ pub fn execute(project_name: &str) -> anyhow::Result<()> {
     if let Err(err) = scaffold(
         &dir,
         project_name,
+        &app_name,
         &version,
         &description,
         &author,
@@ -117,6 +123,7 @@ pub fn execute(project_name: &str) -> anyhow::Result<()> {
 fn scaffold(
     dir: &Path,
     project_name: &str,
+    app_name: &str,
     version: &str,
     description: &str,
     author: &str,
@@ -131,22 +138,22 @@ fn scaffold(
     // builds/build_src/src directory")?;
 
     if targets.contains(&"android") {
-        android::create(dir, project_name, group);
+        android::create(dir, project_name, app_name, group);
     }
     if targets.contains(&"ios") {
-        ios::create(dir, project_name, group);
+        ios::create(dir, project_name, app_name, group);
     }
     if targets.contains(&"macos") {
-        macos::create(dir, project_name, group);
+        macos::create(dir, project_name, app_name, group);
     }
     if targets.contains(&"windows") {
-        window::create(dir, project_name, group);
+        window::create(dir, project_name, app_name, group);
     }
     if targets.contains(&"linux") {
-        linux::create(dir, project_name, group);
+        linux::create(dir, project_name, app_name, group);
     }
     if targets.contains(&"web") {
-        web::create(dir, project_name, group);
+        web::create(dir, project_name, app_name, group);
     }
 
     fs::write(
@@ -181,17 +188,64 @@ fn scaffold(
 
     fs::write(
         dir.join("README.md"),
-        format!("# {}\n\n{}", project_name, description),
+        format!("# {}\n\n{}", app_name, description),
     )
     .context("writing README.md")?;
 
     // Persist project metadata so run/build can read it back instead of
-    // re-parsing Cargo.toml.
-    AimerManifest::new(project_name, version, description, author, group)
+    // re-parsing Cargo.toml. `package.name` is the application name the
+    // bundles are shipped under; the Cargo package keeps the project name.
+    AimerManifest::new(app_name, version, description, author, group)
         .write_to(dir)
         .context("writing Aimer.toml")?;
 
     Ok(())
+}
+
+/// Escape the characters that are significant in XML and HTML text so an
+/// application name can be embedded in a generated manifest or page.
+pub(crate) fn escape_markup(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Reject an application name the platform bundles cannot be named after.
+///
+/// Unlike the project name this is a display name, so spaces are fine; it still
+/// becomes a `.app` folder and an executable file name, so it must be non-empty
+/// and free of path separators and the characters filesystems reserve.
+fn validate_app_name(name: &str) -> Result<(), &'static str> {
+    const RESERVED: &[char] = &[':', '*', '?', '"', '<', '>', '|'];
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("app name must not be empty");
+    }
+    if name == "." || name == ".." {
+        return Err("app name must not be '.' or '..'");
+    }
+    if name.contains(['/', '\\']) {
+        return Err("app name must not contain path separators");
+    }
+    if name.contains(RESERVED) {
+        return Err("app name must not contain reserved characters (: * ? \" < > |)");
+    }
+    if name.contains(|c: char| c.is_control()) {
+        return Err("app name must not contain control characters");
+    }
+    Ok(())
+}
+
+/// [`validate_app_name`] in the shape the `inquire` prompt expects.
+fn validate_app_name_input(
+    input: &str,
+) -> Result<inquire::validator::Validation, inquire::CustomUserError> {
+    Ok(match validate_app_name(input) {
+        Ok(()) => inquire::validator::Validation::Valid,
+        Err(message) => inquire::validator::Validation::Invalid(message.into()),
+    })
 }
 
 /// Validate a project name before any prompts or filesystem writes.
@@ -281,6 +335,7 @@ mod tests {
         scaffold(
             &dir,
             "myapp",
+            "My App",
             "0.2.0",
             "a test app",
             "tester",
@@ -312,13 +367,74 @@ mod tests {
                 .any(|value| value.as_str() == Some("rlib"))
         );
 
-        // aimer.toml round-trips with the collected metadata.
+        // aimer.toml round-trips with the collected metadata. Its name is the
+        // application name; the Cargo package above keeps the project name.
         let manifest = AimerManifest::load_from(&dir).unwrap().unwrap();
-        assert_eq!(manifest.package.name, "myapp");
+        assert_eq!(manifest.package.name, "My App");
+        assert_eq!(crate::config::resolve_package_name(&dir), "My App");
+        assert_eq!(crate::config::resolve_cargo_package_name(&dir), "myapp");
         assert_eq!(manifest.package.version, "0.2.0");
         assert_eq!(manifest.package.description, "a test app");
         assert_eq!(manifest.package.author, "tester");
         assert_eq!(manifest.package.group, "com.example.myapp");
+    }
+
+    #[test]
+    fn app_names_may_contain_spaces_but_not_path_syntax() {
+        for name in ["My App", "myapp", "Café 2", "  padded  "] {
+            assert!(validate_app_name(name).is_ok(), "should accept '{name}'");
+        }
+        for name in ["", "   ", ".", "..", "a/b", "a\\b", "a:b", "a|b", "a\tb"] {
+            assert!(validate_app_name(name).is_err(), "should reject '{name}'");
+        }
+    }
+
+    #[test]
+    fn markup_escaping_covers_xml_significant_characters() {
+        assert_eq!(
+            escape_markup("Tom & <Jerry's> \"app\""),
+            "Tom &amp; &lt;Jerry&apos;s&gt; &quot;app&quot;"
+        );
+    }
+
+    #[test]
+    fn scaffold_uses_the_app_name_for_labels_and_the_project_name_for_identifiers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("myapp");
+
+        scaffold(
+            &dir,
+            "myapp",
+            "Fish & Chips",
+            "0.1.0",
+            "",
+            "",
+            "com.example.myapp",
+            &["android", "linux", "macos", "web", "windows"],
+        )
+        .unwrap();
+
+        let strings = fs::read_to_string(
+            dir.join("builds/android/app/src/main/res/values/strings.xml"),
+        )
+        .unwrap();
+        assert!(strings.contains(">Fish &amp; Chips<"), "{strings}");
+
+        let desktop = fs::read_to_string(dir.join("builds/linux/myapp.desktop")).unwrap();
+        assert!(desktop.contains("Name=Fish & Chips"), "{desktop}");
+        assert!(desktop.contains("Exec=myapp"), "{desktop}");
+
+        let html = fs::read_to_string(dir.join("builds/web/index.html")).unwrap();
+        assert!(html.contains("<title>Fish &amp; Chips</title>"), "{html}");
+
+        let manifest = fs::read_to_string(dir.join("builds/windows/app.manifest")).unwrap();
+        assert!(manifest.contains("<description>Fish &amp; Chips</description>"));
+
+        // Xcode keeps the Cargo package for the project and takes the display
+        // name from the product at build time.
+        assert!(dir.join("builds/macos/myapp.xcodeproj").is_dir());
+        let plist = fs::read_to_string(dir.join("builds/macos/myapp/Info.plist")).unwrap();
+        assert!(plist.contains("<string>$(PRODUCT_NAME)</string>"), "{plist}");
     }
 
     #[test]
@@ -329,6 +445,7 @@ mod tests {
         let dir = tmp.path().join("throwaway");
         scaffold(
             &dir,
+            "throwaway",
             "throwaway",
             "0.1.0",
             "",
