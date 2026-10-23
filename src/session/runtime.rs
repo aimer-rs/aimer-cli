@@ -259,7 +259,7 @@ pub struct ControlClient {
 }
 
 impl ControlClient {
-    fn new(descriptor: SessionDescriptor) -> Self {
+    pub(crate) fn new(descriptor: SessionDescriptor) -> Self {
         Self { descriptor }
     }
 

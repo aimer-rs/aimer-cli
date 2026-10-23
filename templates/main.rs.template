@@ -1,3 +1,5 @@
+use aimer::input::button::Button;
+use aimer::input::callback::VoidCallback;
 use aimer::style::*;
 use aimer::*;
 
@@ -8,9 +10,7 @@ fn main() {
     AimerApp::start(CounterWidget::new(2))
 }
 
-// creating a widget with state
-#[allow(non_snake_case)]
-#[widget(Stateful)]
+#[derive(StatefulWidget)]
 pub struct CounterWidget {
     pub initial_count: i32,
 }
@@ -23,7 +23,6 @@ impl CounterWidget {
 // create a state for the CounterWidget
 pub struct CounterState {
     count: i32,
-    on_loading: bool,
     updater: StateUpdater<Self>,
 }
 
@@ -35,7 +34,6 @@ impl StatefulWidget for CounterWidget {
         CounterState {
             count: self.initial_count,
             updater: StateUpdater::empty(),
-            on_loading: false,
         }
     }
 }
@@ -50,24 +48,19 @@ impl State<CounterWidget> for CounterState {
 
     // build the widget with state
     fn build(&self, _: &BuildContext) -> impl Widget {
-        // debug!("self.count: {}", self.count);
         let updater = self.updater.clone();
         Container::new()
             .color(Color::WHITE)
-            .padding(LayoutSpacing {
-                top: Spacing::Px(20),
-                ..Default::default()
-            })
+            .padding(LayoutSpacing::new().top(20))
             .child(
-                Flex::new()
-                    .direction(LayoutDirection::Column)
+                Column::new()
                     .vertical_alignment(BoxAlignment::Center)
                     .horizontal_alignment(BoxAlignment::Center)
                     .children([
                         Text::new("Widget with State")
                             .text_style(
                                 TextStyle::new()
-                                    .font_size(25)
+                                    .font_size(30)
                                     .color(Colors::Black)
                                     .font_weight(FontWeight::Bold),
                             )
@@ -77,57 +70,37 @@ impl State<CounterWidget> for CounterState {
                             .text_style(TextStyle::new().font_size(25).color(Colors::Black))
                             .boxed(),
                         SizedBox::new().height(50).boxed(),
-                        Container::new()
-                            .box_decoration(BoxDecoration::new().border_radius(8))
-                            .width(Dimension::Px(200.0))
-                            .height(Dimension::Px(50.0))
-                            .box_child(
-                                Button::new()
-                                    .disabled(self.on_loading)
-                                    .on_press(move || {
-                                        println!(
-                                            "Button pressed with state : {}",
-                                            updater.read_state().count
-                                        );
-                                        updater.set_state(|state| {
-                                            state.count += 1;
-                                        });
-                                    })
-                                    .decoration(BoxDecoration::new().background_color(Color::BLACK))
-                                    .child(
-                                        Text::new(if self.on_loading {
-                                            "Loading..."
-                                        } else {
-                                            "Increase"
-                                        })
-                                        .text_align(TextAlign::MidCenter)
-                                        .text_style(TextStyle::new().color(Color::WHITE)),
-                                    ),
-                            ),
-                        SizedBox::new().height(20).boxed(),
-                        Container::new()
-                            .box_decoration(BoxDecoration::new().border_radius(8))
-                            .width(Dimension::Px(200.0))
-                            .height(Dimension::Px(50.0))
-                            .box_child(
-                                Button::new()
-                                    .disabled(self.on_loading)
-                                    .on_press({
-                                        let updater = self.updater.clone();
-                                        move || {
-                                            updater.set_state(|state| {
-                                                state.count -= 1;
-                                            });
-                                        }
-                                    })
-                                    .decoration(BoxDecoration::new().background_color(Color::BLACK))
-                                    .child(
-                                        Text::new("Decrease")
-                                            .text_align(TextAlign::MidCenter)
-                                            .text_style(TextStyle::new().color(Color::WHITE)),
-                                    ),
-                            ),
+                        my_button("Increase", move || {
+                            updater.set_state(|state| {
+                                state.count += 1;
+                            });
+                        }),
+                         SizedBox::new().height(20).boxed(),
+                        my_button("Decrease", move || {
+                            updater.set_state(|state| {
+                                state.count -= 1;
+                            });
+                        }),
+                       
                     ]),
             )
     }
+}
+
+// functional style widget
+fn my_button(label: &str, on_click: impl Into<VoidCallback>) -> AnyWidget {
+    Container::new()
+        .box_decoration(BoxDecoration::new().border_radius(8))
+        .width(200)
+        .height(50)
+        .box_child(
+            Button::new()
+                .on_press(on_click)
+                .decoration(BoxDecoration::new().background_color(Color::BLACK))
+                .child(
+                    Text::new(label.to_string())
+                        .text_align(TextAlign::MidCenter)
+                        .text_style(TextStyle::new().color(Color::WHITE)),
+                ),
+        )
 }
