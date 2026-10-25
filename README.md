@@ -45,6 +45,7 @@ bundling, and release packaging across desktop, mobile, and web targets.
     - [3. Run the Application](#3-run-the-application)
 - [Command Reference](#command-reference)
     - [`aimer create`](#aimer-create)
+    - [`aimer init`](#aimer-init)
     - [`aimer run`](#aimer-run)
     - [`aimer build`](#aimer-build)
     - [`aimer assemble`](#aimer-assemble)
@@ -206,7 +207,6 @@ The generated project structure looks like this:
 my_aimer_app/
 ├── Aimer.toml           # Aimer framework manifest & asset declarations
 ├── Cargo.toml           # Rust package configuration
-├── build.rs             # Build script with platform-specific link flags
 ├── README.md            # App documentation
 ├── src/
 │   └── main.rs          # Application entry point & UI widget definitions
@@ -260,6 +260,27 @@ Scaffolds a new Aimer project with target configurations, templates, and platfor
 ```bash
 aimer create <PROJECT_NAME>
 ```
+
+---
+
+### `aimer init`
+
+Turns an existing Cargo project into an Aimer project. It asks the same questions as `aimer create` and generates the
+same `Aimer.toml` and `builds/<platform>/` scaffolds, but works in place: your sources and README are left alone, and
+`Cargo.toml` (an Aimer-capable `[lib]` and the `aimer` dependency) and `.gitignore` are only extended.
+It refuses to run on a project that already has an `Aimer.toml` (use `aimer migrate`) or to replace an existing
+`builds/<platform>/` folder.
+
+```bash
+aimer init [PATH]
+```
+
+**Arguments:**
+
+- `[PATH]`: Cargo project directory (defaults to the current directory).
+
+Your entry point still has to start the app, as in the `aimer create` template (`#[aimer::main]` and
+`AimerApp::start(...)`).
 
 ---
 

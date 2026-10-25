@@ -163,6 +163,12 @@ enum Commands {
         project_name: String,
     },
 
+    /// Turn an existing Cargo project into an Aimer project
+    Init {
+        /// Cargo project directory (defaults to the current directory)
+        path: Option<std::path::PathBuf>,
+    },
+
     /// Read or search crate documentation from docs.rs or installed Rust toolchain docs
     Docs {
         /// Cargo package name or toolchain crate, for example `serde` or `std`
@@ -337,6 +343,9 @@ fn main() -> anyhow::Result<()> {
     match &cli.command {
         Some(Commands::Create { project_name }) => {
             commands::create::execute(project_name)?;
+        }
+        Some(Commands::Init { path }) => {
+            commands::init::execute(path.as_deref())?;
         }
         Some(Commands::Docs {
             crate_name,

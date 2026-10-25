@@ -6,6 +6,7 @@ pub mod completions;
 pub mod create;
 pub mod docs;
 pub mod doctor;
+pub mod init;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 #[cfg(feature = "mcp")]

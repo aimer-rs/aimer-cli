@@ -2,6 +2,7 @@ pub mod android;
 pub mod ios;
 pub mod linux;
 pub mod macos;
+pub(crate) mod prompt;
 pub mod web;
 pub mod window;
 
@@ -9,85 +10,31 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use inquire::ui::{Color, RenderConfig, Styled};
-use inquire::{Confirm, MultiSelect, Text};
 
 use crate::config::AimerManifest;
 use crate::errors::AimerError;
 
-macro_rules! prompt_abortable {
-    ($prompt:expr) => {
-        loop {
-            match $prompt.prompt() {
-                Ok(val) => break val,
-                Err(inquire::error::InquireError::OperationInterrupted) => {
-                    println!("press 'ctrl + c' again to exit");
-                    crossterm::terminal::enable_raw_mode().unwrap();
-                    if let Ok(crossterm::event::Event::Key(event)) = crossterm::event::read() {
-                        if event.code == crossterm::event::KeyCode::Char('c')
-                            && event
-                                .modifiers
-                                .contains(crossterm::event::KeyModifiers::CONTROL)
-                        {
-                            crossterm::terminal::disable_raw_mode().unwrap();
-                            std::process::exit(1);
-                        }
-                    }
-                    crossterm::terminal::disable_raw_mode().unwrap();
-                }
-                Err(inquire::error::InquireError::OperationCanceled) => {
-                    std::process::exit(1);
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
-            }
-        }
-    };
-}
+/// Template for the `.gitignore` of a new project.
+pub(crate) const GITIGNORE_TEMPLATE: &str = include_str!("../../templates/.gitignore.template");
 
 pub fn execute(project_name: &str) -> anyhow::Result<()> {
     // Reject invalid names up-front, before any prompts or filesystem writes.
     validate_project_name(project_name)?;
 
-    let config = RenderConfig {
-        prompt_prefix: Styled::new("◆").with_fg(Color::LightCyan),
-        highlighted_option_prefix: Styled::new("│  ❯").with_fg(Color::LightCyan),
-        unhighlighted_option_prefix: Styled::new("│   ").with_fg(Color::DarkGrey),
-        selected_checkbox: Styled::new("●").with_fg(Color::LightGreen),
-        unselected_checkbox: Styled::new("○").with_fg(Color::DarkGrey),
-        ..RenderConfig::default()
-    };
-    inquire::set_global_render_config(config);
+    prompt::install_render_config();
 
     let current_dir = std::env::current_dir().context("failed to read the current directory")?;
     tracing::debug!("current_dir : {}", current_dir.display());
     println!("Creating project '{}'", project_name);
 
-    let app_name = prompt_abortable!(
-        Text::new("App name:")
-            .with_default(project_name)
-            .with_validator(validate_app_name_input)
-    );
-    let app_name = app_name.trim().to_string();
-    let description = prompt_abortable!(Text::new("Description:"));
-    let version = prompt_abortable!(Text::new("Version:").with_default("0.1.0"));
-    let author = prompt_abortable!(Text::new("Author:"));
-    let group = prompt_abortable!(
-        Text::new("Group (e.g. com.example.app):").with_default("com.example.app")
-    );
-    let targets = prompt_abortable!(MultiSelect::new(
-        "Targets:",
-        vec!["macos", "windows", "linux", "android", "ios", "web"]
-    ));
+    let answers = prompt::collect(&prompt::Defaults {
+        app_name: project_name,
+        version: "0.1.0",
+        description: "",
+        author: "",
+    });
 
-    println!(
-        "\nProject config:\n- Name: {}\n- App name: {}\n- Version: {}\n- Description: {}\n- Author: {}\n- Group: {}\n- Targets: {:?}",
-        project_name, app_name, version, description, author, group, targets
-    );
-
-    if !prompt_abortable!(Confirm::new("Is this okay?").with_default(true)) {
+    if !prompt::confirm(project_name, &answers) {
         println!("Aborted.");
         return Ok(());
     }
@@ -103,12 +50,12 @@ pub fn execute(project_name: &str) -> anyhow::Result<()> {
     if let Err(err) = scaffold(
         &dir,
         project_name,
-        &app_name,
-        &version,
-        &description,
-        &author,
-        &group,
-        &targets,
+        &answers.app_name,
+        &answers.version,
+        &answers.description,
+        &answers.author,
+        &answers.group,
+        &answers.targets,
     ) {
         let _ = fs::remove_dir_all(&dir);
         return Err(err).with_context(|| format!("failed to create project '{project_name}'"));
@@ -137,6 +84,52 @@ fn scaffold(
     // fs::create_dir_all(dir.join("builds/build_src/src")).context("creating
     // builds/build_src/src directory")?;
 
+    scaffold_platforms(dir, project_name, app_name, group, targets);
+
+    fs::write(dir.join(".gitignore"), GITIGNORE_TEMPLATE).context("writing .gitignore")?;
+
+    // Cargo.toml
+    fs::write(
+        dir.join("Cargo.toml"),
+        include_str!("../../templates/Cargo.toml.template")
+            .replace("${project_name}", project_name)
+            .replace("${version}", version),
+    )
+    .context("writing Cargo.toml")?;
+
+    // src/lib.rs
+    fs::write(
+        dir.join("src/main.rs"),
+        include_str!("../../templates/main.rs.template"),
+    )
+    .context("writing src/main.rs")?;
+
+    fs::write(
+        dir.join("README.md"),
+        format!("# {}\n\n{}", app_name, description),
+    )
+    .context("writing README.md")?;
+
+    // Persist project metadata so run/build can read it back instead of
+    // re-parsing Cargo.toml. `package.name` is the application name the
+    // bundles are shipped under; the Cargo package keeps the project name.
+    AimerManifest::new(app_name, version, description, author, group)
+        .write_to(dir)
+        .context("writing Aimer.toml")?;
+
+    Ok(())
+}
+
+/// Generate the `builds/<platform>/` scaffold of every selected target.
+///
+/// Shared by `create` and `init`, so both produce identical platform projects.
+pub(crate) fn scaffold_platforms(
+    dir: &Path,
+    project_name: &str,
+    app_name: &str,
+    group: &str,
+    targets: &[&str],
+) {
     if targets.contains(&"android") {
         android::create(dir, project_name, app_name, group);
     }
@@ -155,51 +148,6 @@ fn scaffold(
     if targets.contains(&"web") {
         web::create(dir, project_name, app_name, group);
     }
-
-    fs::write(
-        dir.join(".gitignore"),
-        include_str!("../../templates/.gitignore.template"),
-    )
-    .context("writing .gitignore")?;
-
-    // Cargo.toml
-    fs::write(
-        dir.join("Cargo.toml"),
-        include_str!("../../templates/Cargo.toml.template")
-            .replace("${project_name}", project_name)
-            .replace("${version}", version),
-    )
-    .context("writing Cargo.toml")?;
-
-    // src/lib.rs
-    fs::write(
-        dir.join("src/main.rs"),
-        include_str!("../../templates/main.rs.template"),
-    )
-    .context("writing src/main.rs")?;
-
-    // build.rs — iOS cdylib link workaround for the Swift-provided frame-driver
-    // symbols (see the template for details).
-    fs::write(
-        dir.join("build.rs"),
-        include_str!("../../templates/build.rs.template"),
-    )
-    .context("writing build.rs")?;
-
-    fs::write(
-        dir.join("README.md"),
-        format!("# {}\n\n{}", app_name, description),
-    )
-    .context("writing README.md")?;
-
-    // Persist project metadata so run/build can read it back instead of
-    // re-parsing Cargo.toml. `package.name` is the application name the
-    // bundles are shipped under; the Cargo package keeps the project name.
-    AimerManifest::new(app_name, version, description, author, group)
-        .write_to(dir)
-        .context("writing Aimer.toml")?;
-
-    Ok(())
 }
 
 /// Escape the characters that are significant in XML and HTML text so an
@@ -239,7 +187,7 @@ fn validate_app_name(name: &str) -> Result<(), &'static str> {
 }
 
 /// [`validate_app_name`] in the shape the `inquire` prompt expects.
-fn validate_app_name_input(
+pub(super) fn validate_app_name_input(
     input: &str,
 ) -> Result<inquire::validator::Validation, inquire::CustomUserError> {
     Ok(match validate_app_name(input) {
@@ -346,8 +294,8 @@ mod tests {
 
         // Core files and directories are present.
         assert!(dir.join("src/main.rs").exists(), "missing src/main.rs");
-        assert!(dir.join("build.rs").exists(), "missing build.rs");
         assert!(dir.join("Cargo.toml").exists(), "missing Cargo.toml");
+        assert!(!dir.join("build.rs").exists(), "create must not add a build.rs");
         assert!(dir.join("Aimer.toml").exists(), "missing Aimer.toml");
         assert!(dir.join(".gitignore").exists(), "missing .gitignore");
         assert!(dir.join("README.md").exists(), "missing README.md");
