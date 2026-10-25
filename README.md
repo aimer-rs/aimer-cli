@@ -755,12 +755,24 @@ Run the unit and integration test suite:
 cargo test
 ```
 
+Or with [`cargo-nextest`](https://nexte.st/) (used by CI, see below):
+
+```bash
+cargo nextest run --workspace
+```
+
 Test running the CLI locally:
 
 ```bash
 cargo run -- --help
 cargo run -- doctor
 ```
+
+### Continuous Integration
+
+The [`.github/workflows/ci.yml`](.github/workflows/ci.yml) workflow checks and runs the `cargo-nextest` test suite
+on every push and pull request across five targets: `x86_64-pc-windows-msvc`, `x86_64-unknown-linux-gnu`,
+`aarch64-pc-windows-msvc`, `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`.
 
 ---
 
