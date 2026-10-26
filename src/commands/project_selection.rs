@@ -239,7 +239,13 @@ mod tests {
 
         let selected = select_aimer_project_from(root, Some("second-app")).unwrap();
         assert_eq!(selected.cargo_package, "second-app");
-        assert_eq!(selected.root, root.join("apps/second"));
+        // Compare canonicalized forms on both sides: `cargo metadata` reports
+        // `manifest_path` without Windows' `\\?\` verbatim prefix, even when the
+        // input root already carries it, so a raw comparison can mismatch there.
+        assert_eq!(
+            selected.root.canonicalize().unwrap(),
+            root.join("apps/second").canonicalize().unwrap()
+        );
 
         let result = select_aimer_project_from(root, None);
 
