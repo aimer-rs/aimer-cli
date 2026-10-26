@@ -44,10 +44,17 @@ pub fn execute_with_package(
     release: bool,
     package: Option<String>,
 ) -> anyhow::Result<()> {
-    let project = crate::commands::project_selection::select_aimer_project(package.as_deref())?;
-    let _project_directory = project.enter()?;
+    // Validate the requested platform before touching project selection, so an
+    // unknown or non-assemblable platform is reported on its own terms rather
+    // than being masked by an unrelated "no Aimer project found" error.
     let target = Targets::try_from(platform.as_str())
         .map_err(|_| AimerError::UnknownTarget(platform.clone()))?;
+    if target == Targets::Terminated {
+        bail!("'terminated' is not an assemblable platform");
+    }
+
+    let project = crate::commands::project_selection::select_aimer_project(package.as_deref())?;
+    let _project_directory = project.enter()?;
 
     println!(
         "Assembling '{target}' bundle in {} mode...",
