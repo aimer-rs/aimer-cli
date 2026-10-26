@@ -837,13 +837,15 @@ mod tests {
     fn fetch_devices_always_has_base_devices() {
         let devices = fetch_devices();
         assert!(
-            devices.len() >= 3,
-            "Expected at least 3 devices (macOS, Web, Quit)"
+            devices.len() >= 2,
+            "Expected at least 2 devices (host desktop or Web, and Quit)"
         );
 
-        let has_macos = devices
-            .iter()
-            .any(|d| d.target == Targets::Macos && d.id == "local");
+        let has_host_desktop = Targets::host_desktop().is_none_or(|host| {
+            devices
+                .iter()
+                .any(|d| d.target == host && d.id == host.to_string())
+        });
         let has_web = devices
             .iter()
             .any(|d| d.target == Targets::Web && d.id == "web");
@@ -851,7 +853,7 @@ mod tests {
             .iter()
             .any(|d| d.target == Terminated && d.id == "q");
 
-        assert!(has_macos, "Missing macOS Desktop device");
+        assert!(has_host_desktop, "Missing host desktop device");
         assert!(has_web, "Missing Web Browser device");
         assert!(has_quit, "Missing Quit device");
     }

@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn workspace_projects_require_package_when_selection_is_ambiguous() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
+        let root = &temp.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("apps/first")).unwrap();
         std::fs::create_dir_all(root.join("apps/second")).unwrap();
         std::fs::write(
@@ -228,6 +228,8 @@ mod tests {
                 format!("[package]\nname = '{name}'\nversion = '0.1.0'\nedition = '2021'\n"),
             )
             .unwrap();
+            std::fs::create_dir_all(app.join("src")).unwrap();
+            std::fs::write(app.join("src/main.rs"), "fn main() {}\n").unwrap();
             std::fs::write(
                 app.join("aimer.toml"),
                 format!("[package]\nname = '{name}'\n"),

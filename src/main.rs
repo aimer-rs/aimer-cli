@@ -501,8 +501,11 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
 
         super::apply_project_dir_override(Some(project.path().as_os_str())).unwrap();
+        // Canonicalize both sides: on Windows `current_dir()` omits the `\\?\`
+        // verbatim prefix that `Path::canonicalize()` adds, so comparing the raw
+        // and canonical forms directly would mismatch there.
         assert_eq!(
-            current_dir().unwrap(),
+            current_dir().unwrap().canonicalize().unwrap(),
             project.path().canonicalize().unwrap()
         );
 

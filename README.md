@@ -87,3 +87,4 @@ See [Installation](docs/INSTALLATION.md) for feature flags and shell completions
 - MIT license (http://opensource.org/licenses/MIT)
 
 at your option.
+

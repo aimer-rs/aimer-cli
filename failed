@@ -1,0 +1,29 @@
+
+Window X86: 
+
+FAIL [   0.085s] (131/639) aimer_cli::bin/aimer commands::project_selection::tests::workspace_projects_require_package_when_selection_is_ambiguous
+FAIL [   0.015s] (253/639) aimer_cli::bin/aimer commands::run::tests::fetch_devices_always_has_base_devices
+FAIL [   0.011s] (480/639) aimer_cli::bin/aimer tests::runtime_project_dir_override_uses_the_launch_environment
+FAIL [   0.045s] (529/639) aimer_hot_reload generation::tests::generated_guest_package_wraps_the_explicit_portable_entry
+
+Linux X86: 
+
+FAIL [   0.043s] (125/642) aimer_cli::bin/aimer commands::project_selection::tests::workspace_projects_require_package_when_selection_is_ambiguous
+FAIL [   0.008s] (254/642) aimer_cli::bin/aimer commands::run::tests::fetch_devices_always_has_base_devices
+
+Windows arm
+
+FAIL [   0.213s] (129/639) aimer_cli::bin/aimer commands::project_selection::tests::workspace_projects_require_package_when_selection_is_ambiguous
+FAIL [   0.044s] (253/639) aimer_cli::bin/aimer commands::run::tests::fetch_devices_always_has_base_devices
+FAIL [   0.031s] (481/639) aimer_cli::bin/aimer tests::runtime_project_dir_override_uses_the_launch_environment
+FAIL [   0.125s] (530/639) aimer_hot_reload 
+
+Linux Arm
+
+FAIL [   0.034s] (119/642) aimer_cli::bin/aimer commands::project_selection::tests::workspace_projects_require_package_when_selection_is_ambiguous
+FAIL [   0.005s] (253/642) aimer_cli::bin/aimer commands::run::tests::fetch_devices_always_has_base_devices
+
+
+MacOS
+
+FAIL [   0.089s] (126/643) aimer_cli::bin/aimer commands::project_selection::tests::workspace_projects_require_package_when_selection_is_ambiguous

@@ -289,12 +289,16 @@ fn generated_guest_package_wraps_the_explicit_portable_entry() {
 
     assert_eq!(generated.package(), "aimer_generated_guest");
     assert_eq!(generated.manifest(), output.join("Cargo.toml"));
+    // Paths are rendered through `toml::Value::String`, which may quote them
+    // as single-quoted TOML literal strings (e.g. on Windows, to avoid
+    // escaping backslashes) rather than Rust's `Debug`-escaped form; encode
+    // the expected paths the same way the implementation does.
+    let adapter_path = toml::Value::String(adapter.to_string_lossy().into_owned()).to_string();
+    let project_path = toml::Value::String(project.to_string_lossy().into_owned()).to_string();
     assert_eq!(
         fs::read_to_string(generated.manifest()).unwrap(),
         format!(
-            "[package]\nname = \"aimer_generated_guest\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\naimer_wasm_guest = {{ path = {:?} }}\napplication = {{ path = {:?}, package = \"counter-app\" }}\n\n[workspace]\n\n[profile.dev]\ndebug = 0\n",
-            adapter.to_string_lossy(),
-            project.to_string_lossy(),
+            "[package]\nname = \"aimer_generated_guest\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[lib]\ncrate-type = [\"cdylib\"]\n\n[dependencies]\naimer_wasm_guest = {{ path = {adapter_path} }}\napplication = {{ path = {project_path}, package = \"counter-app\" }}\n\n[workspace]\n\n[profile.dev]\ndebug = 0\n"
         )
     );
     assert_eq!(
