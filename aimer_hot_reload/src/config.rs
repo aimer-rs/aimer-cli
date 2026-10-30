@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -346,8 +347,12 @@ pub struct AimerManifest {
     pub package: PackageMeta,
     #[serde(default)]
     pub build: Option<BuildMeta>,
-    #[serde(default)]
-    pub assets: Option<AssetsMeta>,
+    /// The `[assets]` table: asset name to project-relative file path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assets: BTreeMap<String, String>,
+    /// The `[fonts]` table: font name to project-relative file path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fonts: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -406,20 +411,6 @@ impl HotReloadGuestMeta {
     }
 }
 
-/// The `[assets]` section of `aimer.toml`. Lists the files that should be
-/// bundled into each platform package and made available to the running app
-/// through [`ImageSource::Asset`](../../aimer_assets) and friends.
-///
-/// Paths are relative to the project root and are preserved verbatim when the
-/// files are copied into a platform's asset root, so the same string used here
-/// is also the runtime lookup key.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AssetsMeta {
-    /// Files to bundle, e.g. `"assets/logo.png"`.
-    #[serde(default)]
-    pub files: Vec<String>,
-}
-
 impl AimerManifest {
     /// Build a manifest from the metadata collected during `create`.
     pub fn new(name: &str, version: &str, description: &str, author: &str, group: &str) -> Self {
@@ -432,17 +423,25 @@ impl AimerManifest {
                 group: group.to_string(),
             },
             build: None,
-            assets: None,
+            assets: BTreeMap::new(),
+            fonts: BTreeMap::new(),
         }
     }
 
-    /// The list of registered asset files, or an empty slice when the
-    /// `[assets]` section is missing or empty.
-    pub fn asset_files(&self) -> &[String] {
-        self.assets
-            .as_ref()
-            .map(|a| a.files.as_slice())
-            .unwrap_or(&[])
+    /// Every file registered under `[assets]` and `[fonts]`, in table order
+    /// (assets first), without duplicate paths.
+    ///
+    /// Paths are relative to the project root and are preserved verbatim when
+    /// copied into a platform's asset root, so each path is also the runtime
+    /// lookup key. The result is empty when both sections are missing.
+    pub fn asset_files(&self) -> Vec<String> {
+        let mut files: Vec<String> = Vec::new();
+        for path in self.assets.values().chain(self.fonts.values()) {
+            if !files.contains(path) {
+                files.push(path.clone());
+            }
+        }
+        files
     }
 
     /// Load `<dir>/Aimer.toml` or `<dir>/aimer.toml`. Returns `Ok(None)` when
@@ -799,7 +798,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join(MANIFEST_FILE),
-            "[application]\nname = \"Jaime\"\nversion = \"0.0.1\"\ngroup = \"com.example.jaime\"\n\n[assets]\nfiles = [\"assets/logo.png\", \"assets/fonts/Inter.ttf\"]\n",
+            "[application]\nname = \"Jaime\"\nversion = \"0.0.1\"\ngroup = \"com.example.jaime\"\n\n[assets]\nlogo = \"assets/logo.png\"\n\n[fonts]\ninter = \"assets/fonts/Inter.ttf\"\n",
         )
         .unwrap();
 
@@ -813,6 +812,42 @@ mod tests {
                 "assets/fonts/Inter.ttf".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn assets_and_fonts_parse_as_name_to_path_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(MANIFEST_FILE),
+            "[package]\nname = \"app\"\n\n[assets]\nimage_1 = \"path\"\nimage_2 = \"path_2\"\n\n[fonts]\nfont_1 = \"path/to/font\"\n",
+        )
+        .unwrap();
+
+        let loaded = AimerManifest::load_from(dir.path()).unwrap().unwrap();
+        assert_eq!(loaded.assets.get("image_1").map(String::as_str), Some("path"));
+        assert_eq!(
+            loaded.assets.get("image_2").map(String::as_str),
+            Some("path_2")
+        );
+        assert_eq!(
+            loaded.fonts.get("font_1").map(String::as_str),
+            Some("path/to/font")
+        );
+        assert_eq!(
+            loaded.asset_files(),
+            ["path", "path_2", "path/to/font"].map(String::from)
+        );
+    }
+
+    #[test]
+    fn legacy_assets_array_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(MANIFEST_FILE),
+            "[package]\nname = \"app\"\n\n[assets]\nfiles = [\"a.png\"]\n",
+        )
+        .unwrap();
+        assert!(AimerManifest::load_from(dir.path()).is_err());
     }
 
     #[test]

@@ -355,6 +355,17 @@ mod tests {
     }
 
     #[test]
+    fn release_build_is_installable_without_extra_signing_setup() {
+        with_scaffold(|android| {
+            let app = fs::read_to_string(android.join("app/build.gradle.kts")).unwrap();
+            // An unsigned release APK is rejected by the installer with
+            // `INSTALL_PARSE_FAILED_NO_CERTIFICATES`.
+            assert!(app.contains("getByName(\"release\")"));
+            assert!(app.contains("signingConfigs.getByName(\"debug\")"));
+        });
+    }
+
+    #[test]
     fn kotlin_source_set_is_registered_for_the_application() {
         with_scaffold(|android| {
             // The activity lives in `src/main/kotlin`, which AGP only compiles

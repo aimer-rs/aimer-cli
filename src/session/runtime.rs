@@ -274,7 +274,35 @@ impl ControlClient {
         self.request_with_timeout(operation, payload, REQUEST_TIMEOUT)
     }
 
+    /// Send a control request, retrying a bounded number of times when the
+    /// loopback connection itself fails transiently (reset, or closed before
+    /// a response arrived). Genuine application-level error replies (e.g. a
+    /// well-formed `"busy"` response) are returned immediately, unretried.
     fn request_with_timeout(
+        &self,
+        operation: &str,
+        payload: Value,
+        read_timeout: Duration,
+    ) -> anyhow::Result<Value> {
+        let mut last_error = None;
+        for attempt in 0..CONTROL_REQUEST_RETRY_COUNT {
+            match self.send_request(operation, payload.clone(), read_timeout) {
+                Ok(value) => return Ok(value),
+                Err(error) if is_transient_control_error(&error) => {
+                    last_error = Some(error);
+                    if attempt + 1 < CONTROL_REQUEST_RETRY_COUNT {
+                        thread::sleep(CONTROL_REQUEST_RETRY_DELAY);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow!("aimer MCP control request failed")))
+    }
+
+    /// Perform a single control request/response round trip over a fresh
+    /// connection.
+    fn send_request(
         &self,
         operation: &str,
         payload: Value,
@@ -338,4 +366,26 @@ impl ControlClient {
         }
         Err(last_error.unwrap_or_else(|| anyhow!("session liveness validation failed")))
     }
+}
+
+/// Whether a control request error is a transport-level hiccup (the
+/// connection was reset, closed, or yielded an empty/truncated response)
+/// rather than a genuine application-level reply, so it is safe to retry.
+fn is_transient_control_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| {
+                matches!(
+                    io_error.kind(),
+                    std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::ConnectionRefused
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::UnexpectedEof
+                        | std::io::ErrorKind::TimedOut
+                )
+            })
+            || cause.downcast_ref::<serde_json::Error>().is_some()
+    })
 }

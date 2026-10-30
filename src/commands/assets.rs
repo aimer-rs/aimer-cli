@@ -44,7 +44,7 @@ fn needs_copy(src: &Path, dest: &Path) -> bool {
     }
 }
 
-/// Copy every file registered under `[assets]` in `aimer.toml` into
+/// Copy every file registered under `[assets]` and `[fonts]` in `aimer.toml` into
 /// `dest_root`, preserving each file's relative path.
 ///
 /// The relative path is kept verbatim so the string used in `aimer.toml`
@@ -56,7 +56,7 @@ pub fn copy_assets_into(dest_root: &str) -> anyhow::Result<AssetCopyReport> {
     let files: Vec<String> = AimerManifest::load_from(Path::new("."))
         .ok()
         .flatten()
-        .map(|m| m.asset_files().to_vec())
+        .map(|m| m.asset_files())
         .unwrap_or_default();
 
     copy_files(&files, Path::new("."), Path::new(dest_root))
@@ -91,7 +91,7 @@ fn sync_trunk_copy_entries_in(dir: &Path) -> anyhow::Result<()> {
     let assets: Vec<String> = AimerManifest::load_from(dir)
         .ok()
         .flatten()
-        .map(|m| m.asset_files().to_vec())
+        .map(|m| m.asset_files())
         .unwrap_or_default();
 
     let existing = std::fs::read_to_string(&trunk_toml)
@@ -235,11 +235,10 @@ mod tests {
 
         let mut toml = String::from("[package]\nname = \"test\"\nversion = \"0.1.0\"\n");
         if let Some(assets) = aimer_assets {
-            toml.push_str("\n[assets]\nfiles = [\n");
-            for a in assets.split(',') {
-                toml.push_str(&format!("  \"{a}\",\n"));
+            toml.push_str("\n[assets]\n");
+            for (i, a) in assets.split(',').enumerate() {
+                toml.push_str(&format!("asset_{i} = \"{a}\"\n"));
             }
-            toml.push_str("]\n");
         }
         std::fs::write(dir.path().join("aimer.toml"), &toml).unwrap();
         dir
