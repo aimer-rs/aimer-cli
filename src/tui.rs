@@ -84,9 +84,16 @@ impl RawModeGuard {
         execute!(
             stdout(),
             EnterAlternateScreen,
-            EnableButtonMouseCapture,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            EnableButtonMouseCapture
         )?;
+        // The legacy Windows console API rejects keyboard enhancement flags,
+        // so only push them when the terminal reports support.
+        let supports_enhancement = supports_enhancement
+            && execute!(
+                stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            )
+            .is_ok();
         Ok(Self {
             alternate_screen: true,
             mouse_capture: true,
