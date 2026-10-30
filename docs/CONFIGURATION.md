@@ -20,12 +20,14 @@ group = "com.example.app"
 # Default platform used by `aimer build` when no --target is specified
 default_target = "macos"
 
+# Files relative to the project root to bundle across all platforms,
+# declared as `name = "path"`
 [assets]
-# Files relative to the project root to bundle across all platforms
-files = [
-    "assets/icon.png",
-    "assets/data.json",
-]
+icon = "assets/icon.png"
+data = "assets/data.json"
+
+[fonts]
+inter = "assets/fonts/Inter-Regular.ttf"
 
 # Optional hot-reload guest configuration (unstable / nightly)
 [build.hot_reload]
@@ -41,14 +43,15 @@ limits = "my_aimer_app::APP_LIMITS"
 To bundle assets (images, fonts, JSON configuration) into your application across all supported targets:
 
 1. Place your asset files inside your project directory (e.g. `assets/logo.png`).
-2. Declare the paths under `[assets]` in `Aimer.toml`:
+2. Declare the paths under `[assets]` (and fonts under `[fonts]`) in `Aimer.toml` as `name = "path"` entries:
 
 ```toml
 [assets]
-files = [
-    "assets/logo.png",
-    "assets/fonts/Inter-Regular.ttf",
-]
+image_1 = "assets/logo.png"
+image_2 = "assets/banner.png"
+
+[fonts]
+font_1 = "assets/fonts/Inter-Regular.ttf"
 ```
 
 When building or assembling for any target (macOS, iOS, Android, Desktop, Web), `aimer` automatically copies these files

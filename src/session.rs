@@ -36,6 +36,13 @@ const LIVENESS_RETRY_COUNT: usize = 3;
 const LIVENESS_RETRY_DELAY: Duration = Duration::from_millis(10);
 const LIVENESS_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60 * 10);
+/// Number of attempts for a single control request when the underlying
+/// loopback connection fails transiently (e.g. accepted but reset, or closed
+/// before a response was written). A busy/accept thread under heavy load can
+/// occasionally drop or empty a connection; this retries only those
+/// transport-level hiccups, never a genuine application-level error reply.
+const CONTROL_REQUEST_RETRY_COUNT: usize = 3;
+const CONTROL_REQUEST_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 /// Whether a process belongs to the host or to a connected device.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
