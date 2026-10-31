@@ -120,7 +120,6 @@ pub(super) fn wrap_app(job: &PackageJob, reporter: &dyn Reporter) -> anyhow::Res
                 )?;
             }
         }
-        PackageFormat::Ipa => bail!("an .ipa is an iOS package, not a macOS one"),
         PackageFormat::Pkg => {
             reporter.note(format!("Building installer package {output}..."));
             let installer = job.signing.and_then(|p| p.installer_identity.as_deref());
@@ -129,6 +128,7 @@ pub(super) fn wrap_app(job: &PackageJob, reporter: &dyn Reporter) -> anyhow::Res
                 Step::new(StepKind::Other, "pkgbuild"),
             )?;
         }
+        other => bail!("a .{} is not a macOS package", other.extension()),
     }
 
     if let Some(auth) = job.signing.and_then(|plan| plan.notary.as_ref()) {

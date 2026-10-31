@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+mod android;
 mod ios;
 mod macos;
 
+pub use android::{AndroidMeta, AndroidSigningMeta};
 pub use ios::{IosMeta, IosSigningMeta};
 pub use macos::{MacosMeta, MacosSigningMeta};
 
@@ -365,6 +367,9 @@ pub struct AimerManifest {
     /// The `[ios]` table: settings that only apply to the iOS target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ios: Option<IosMeta>,
+    /// The `[android]` table: settings that only apply to the Android target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub android: Option<AndroidMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,6 +444,7 @@ impl AimerManifest {
             fonts: BTreeMap::new(),
             macos: None,
             ios: None,
+            android: None,
         }
     }
 

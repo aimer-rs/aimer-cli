@@ -1,0 +1,29 @@
+// Applied by `aimer package android` with `gradlew -I`: signs release builds
+// with the keystore named in the environment and sets the version, whatever the
+// project's own build script says.
+//
+// `finalizeDsl` runs after the build script and before the variants are
+// created, the only point where the Android Gradle plugin still accepts both a
+// new signing config and a changed `defaultConfig`.
+//
+// Read from the environment: AIMER_ANDROID_KEYSTORE, _KEYSTORE_PASSWORD,
+// _KEY_ALIAS, _KEY_PASSWORD, and optionally _VERSION_CODE and _VERSION_NAME.
+allprojects { project ->
+    project.plugins.withId('com.android.application') {
+        project.extensions.getByName('androidComponents').finalizeDsl { android ->
+            def env = System.getenv()
+            def config = android.signingConfigs.create('aimerRelease')
+            config.storeFile = project.file(env['AIMER_ANDROID_KEYSTORE'])
+            config.storePassword = env['AIMER_ANDROID_KEYSTORE_PASSWORD']
+            config.keyAlias = env['AIMER_ANDROID_KEY_ALIAS']
+            config.keyPassword = env['AIMER_ANDROID_KEY_PASSWORD']
+            android.buildTypes.getByName('release').signingConfig = config
+            if (env['AIMER_ANDROID_VERSION_CODE']) {
+                android.defaultConfig.versionCode = env['AIMER_ANDROID_VERSION_CODE'].toInteger()
+            }
+            if (env['AIMER_ANDROID_VERSION_NAME']) {
+                android.defaultConfig.versionName = env['AIMER_ANDROID_VERSION_NAME']
+            }
+        }
+    }
+}

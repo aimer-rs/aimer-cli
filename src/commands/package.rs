@@ -1,3 +1,4 @@
+mod android;
 mod dmg;
 mod ios;
 mod macos;
@@ -26,6 +27,10 @@ pub enum PackageFormat {
     Pkg,
     /// An iOS app archive, ready for App Store Connect or ad-hoc installs.
     Ipa,
+    /// An Android App Bundle, the format Google Play takes.
+    Aab,
+    /// An Android package that installs directly, outside Google Play.
+    Apk,
 }
 
 impl PackageFormat {
@@ -35,6 +40,8 @@ impl PackageFormat {
             PackageFormat::Dmg => "dmg",
             PackageFormat::Pkg => "pkg",
             PackageFormat::Ipa => "ipa",
+            PackageFormat::Aab => "aab",
+            PackageFormat::Apk => "apk",
         }
     }
 
@@ -45,6 +52,7 @@ impl PackageFormat {
         match target {
             Targets::Macos => Some(PackageFormat::Dmg),
             Targets::Ios => Some(PackageFormat::Ipa),
+            Targets::Android => Some(PackageFormat::Aab),
             _ => None,
         }
     }
@@ -54,16 +62,17 @@ impl PackageFormat {
         match self {
             PackageFormat::Dmg | PackageFormat::Pkg => target == Targets::Macos,
             PackageFormat::Ipa => target == Targets::Ios,
+            PackageFormat::Aab | PackageFormat::Apk => target == Targets::Android,
         }
     }
 }
 
 /// Where the packages of a build mode are written, relative to the project root.
 pub(crate) fn dist_dir(target: Targets, release: bool) -> String {
-    let platform = if target == Targets::Ios {
-        "ios"
-    } else {
-        "macos"
+    let platform = match target {
+        Targets::Ios => "ios",
+        Targets::Android => "android",
+        _ => "macos",
     };
     format!("builds/{platform}/dist/{}", profile_name(release))
 }
@@ -128,7 +137,7 @@ pub(crate) fn resolve_request(options: &PackageOptions) -> anyhow::Result<Reques
         Targets::try_from(platform).map_err(|_| AimerError::UnknownTarget(platform.to_string()))?;
     let Some(default) = PackageFormat::default_for(target) else {
         bail!(
-            "packaging for '{target}' is not supported yet; only 'macos' and 'ios' can be packaged"
+            "packaging for '{target}' is not supported yet; only 'macos', 'ios' and 'android' can be packaged"
         );
     };
     let format = options.format.unwrap_or(default);
@@ -140,6 +149,15 @@ pub(crate) fn resolve_request(options: &PackageOptions) -> anyhow::Result<Reques
     }
     if target == Targets::Ios && options.notarize {
         bail!("--notarize applies to macOS packages; iOS builds go through App Store Connect");
+    }
+    if target == Targets::Android && options.notarize {
+        bail!("--notarize applies to macOS packages only");
+    }
+    if target == Targets::Android && !options.release {
+        bail!(
+            "Android packages are signed release builds; \
+             use `aimer assemble android` for a debug build"
+        );
     }
     if target != Targets::Ios && options.upload {
         bail!("--upload is only available for iOS");
@@ -155,15 +173,19 @@ pub(crate) fn resolve_request(options: &PackageOptions) -> anyhow::Result<Reques
 }
 
 /// `aimer package <platform>`: build the app, then wrap it in a distributable
-/// package, a `.dmg` (the default) or `.pkg` on macOS and an `.ipa` on iOS.
+/// package: a `.dmg` (the default) or `.pkg` on macOS, an `.ipa` on iOS, and an
+/// `.aab` (the default) or `.apk` on Android.
 ///
 /// On macOS, `sign` signs the app and the package with the identities from
 /// `[macos.signing]`, and `notarize` implies `sign` and also has Apple notarize
 /// the package and staples the ticket to it. On iOS the app is always signed
-/// (`[ios.signing]`), and `upload` sends the build to App Store Connect.
+/// (`[ios.signing]`), and `upload` sends the build to App Store Connect. On
+/// Android the package is always a signed release build (`[android.signing]`).
 pub fn execute_with_package(options: PackageOptions) -> anyhow::Result<()> {
     let request = resolve_request(&options)?;
-    if !cfg!(target_os = "macos") {
+    // Apple's packages are made with Xcode tooling; Android's only need Gradle
+    // and a JDK, so they work on any host.
+    if request.target != Targets::Android && !cfg!(target_os = "macos") {
         bail!(
             "packaging a '{}' app into a .{} needs a macOS host",
             request.target,
@@ -178,6 +200,7 @@ pub fn execute_with_package(options: PackageOptions) -> anyhow::Result<()> {
 
     let artifact = match request.target {
         Targets::Ios => ios::run(&request, manifest.as_ref())?,
+        Targets::Android => android::run(&request, manifest.as_ref())?,
         _ => macos::run(&request, manifest.as_ref())?,
     };
 

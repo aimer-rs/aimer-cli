@@ -683,7 +683,11 @@ pub(crate) fn apk_path(release: bool) -> String {
 }
 
 /// Compile the Rust library for Android through `cargo ndk`.
-fn build_android(plan: &AndroidPlan, release: bool, reporter: &dyn Reporter) -> anyhow::Result<()> {
+pub(crate) fn build_android(
+    plan: &AndroidPlan,
+    release: bool,
+    reporter: &dyn Reporter,
+) -> anyhow::Result<()> {
     let mut cargo = Command::new("cargo");
     cargo
         .arg("ndk")
@@ -712,18 +716,7 @@ pub(crate) fn package_android(
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<String> {
-    let lib_name = lib_name_of(pkg_name);
-    let src_lib = artifact_path(plan.rust_target, &lib_name, release, ".so");
-    copy_lib(
-        &src_lib,
-        &plan.jni_libs_dir(),
-        &format!("lib{lib_name}.so"),
-        reporter,
-    )?;
-
-    // Stage assets into the APK's `assets/` source set before Gradle packs it,
-    // so they are readable at runtime via AssetManager.
-    reporter.stage_assets("builds/android/app/src/main/assets")?;
+    stage_android_inputs(pkg_name, plan, release, reporter)?;
 
     let project_dir = android_project_dir();
     reporter.note("Building Android project via Gradle...".to_string());
@@ -739,6 +732,29 @@ pub(crate) fn package_android(
     )?;
 
     Ok(apk_path(release))
+}
+
+/// Put the compiled Rust library and the registered assets where Gradle packs
+/// them from. Every Gradle task that builds the app (`assemble*` here, and
+/// `bundleRelease` for `aimer package android`) starts here.
+pub(crate) fn stage_android_inputs(
+    pkg_name: &str,
+    plan: &AndroidPlan,
+    release: bool,
+    reporter: &dyn Reporter,
+) -> anyhow::Result<()> {
+    let lib_name = lib_name_of(pkg_name);
+    let src_lib = artifact_path(plan.rust_target, &lib_name, release, ".so");
+    copy_lib(
+        &src_lib,
+        &plan.jni_libs_dir(),
+        &format!("lib{lib_name}.so"),
+        reporter,
+    )?;
+
+    // Stage assets into the APK's `assets/` source set before Gradle packs it,
+    // so they are readable at runtime via AssetManager.
+    reporter.stage_assets("builds/android/app/src/main/assets")
 }
 
 /// Build the static web bundle via `trunk`.

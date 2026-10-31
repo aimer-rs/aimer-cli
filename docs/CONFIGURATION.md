@@ -38,6 +38,11 @@ notary_profile = "aimer-notary"
 [ios.signing]
 team_id = "ABCDE12345"
 
+# Optional signing for `aimer package android`; passwords come from the environment
+[android.signing]
+keystore = "keys/upload.jks"
+key_alias = "upload"
+
 # Optional hot-reload guest configuration (unstable / nightly)
 [build.hot_reload]
 package = "my_aimer_app"

@@ -139,7 +139,7 @@ aimer assemble android -p moewmoew
 ## `aimer package`
 
 Builds the app and wraps it in a distributable package: a `.dmg` disk image or a `.pkg` installer on macOS, an `.ipa` on
-iOS. Both need a macOS host.
+iOS, and a signed `.aab` or `.apk` on Android. The Apple platforms need a macOS host; Android works on any host.
 
 ```bash
 aimer package [OPTIONS] <PLATFORM>
@@ -147,13 +147,15 @@ aimer package [OPTIONS] <PLATFORM>
 
 **Arguments:**
 
-- `<PLATFORM>`: Target platform to package: `macos` or `ios`.
+- `<PLATFORM>`: Target platform to package: `macos`, `ios` or `android`.
 
 **Options:**
 
-- `-f, --format <FORMAT>`: Package format: `dmg` or `pkg` on macOS (default `dmg`), `ipa` on iOS (default).
+- `-f, --format <FORMAT>`: Package format: `dmg` or `pkg` on macOS (default `dmg`), `ipa` on iOS (default), `aab` or
+  `apk` on Android (default `aab`).
 - `-r, --release`: Package a release build. This is the default, so the flag only states it explicitly.
-- `--debug`: Package a debug build instead. Cannot be combined with `--release`.
+- `--debug`: Package a debug build instead (macOS and iOS; Android packages are always release builds). Cannot be
+  combined with `--release`.
 - `-p, --package <NAME>`: Select an Aimer package in a Cargo workspace.
 - `--sign`: macOS: code-sign the app and the package (see [Signing and notarization](#signing-and-notarization)).
 - `--notarize`: macOS: sign, then have Apple notarize the package and staple the ticket. Implies `--sign`.
@@ -162,7 +164,7 @@ aimer package [OPTIONS] <PLATFORM>
 Unlike `build` and `assemble`, `package` builds in release mode unless `--debug` is given, since a package is meant for
 distribution.
 
-The package is written to `builds/<macos|ios>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
+The package is written to `builds/<macos|ios|android>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
 name and `<version>` comes from `Aimer.toml` (omitted when empty).
 
 - **`dmg`**: a compressed disk image holding the `.app` next to an `Applications` shortcut. Opening it shows an install
@@ -191,6 +193,54 @@ aimer package macos --notarize
 # Debug build, e.g. to try the installer layout quickly
 aimer package macos --debug
 ```
+
+### Android and Google Play
+
+`aimer package android` builds the Rust library, then has Gradle build a **signed release** package: an **`.aab`** (the
+Android App Bundle that Google Play requires for new apps, the default) or an **`.apk`** (`-f apk`, for installing
+directly or for other stores).
+
+```bash
+aimer package android            # builds/android/dist/release/<name>-<version>.aab
+aimer package android -f apk     # ... or an .apk
+```
+
+The generated project signs release builds with the debug key so they can run locally. `aimer package` replaces that with
+your own key at build time (a Gradle init script), so the project does not change and existing projects work as they
+are. Debug builds are not packaged; `aimer assemble android` makes those.
+
+You need a keystore. `keytool -genkeypair -v -keystore upload.jks -alias upload -keyalg RSA -keysize 2048 -validity
+10000` makes one. Names and paths go in `Aimer.toml`; **passwords are read from the environment only**:
+
+```toml
+[android]
+version_code = 12                 # optional, see below
+
+[android.signing]
+keystore = "keys/upload.jks"      # relative to the project root
+key_alias = "upload"
+```
+
+| Variable                          | Overrides / provides                                                   |
+| --------------------------------- | ---------------------------------------------------------------------- |
+| `AIMER_ANDROID_KEYSTORE`          | `keystore`                                                             |
+| `AIMER_ANDROID_KEY_ALIAS`         | `key_alias`                                                            |
+| `AIMER_ANDROID_KEYSTORE_PASSWORD` | the keystore password (required)                                       |
+| `AIMER_ANDROID_KEY_PASSWORD`      | the key password; defaults to the keystore password                    |
+| `AIMER_ANDROID_VERSION_CODE`      | `version_code`                                                         |
+
+- **Checked first.** Before the build, the keystore must exist and open with the password and alias, so a mistake fails in
+  seconds.
+- **Version.** `versionName` is `version` from `Aimer.toml`. `versionCode` is `version_code` if set, otherwise
+  `major * 1,000,000 + minor * 1,000 + patch` (`1.2.3` is `1002003`), which grows with every release of a normal version
+  number. Google Play rejects an upload whose `versionCode` is not higher than the last one, so on CI set
+  `AIMER_ANDROID_VERSION_CODE` to a build number.
+- **Google Play signing.** For an `.aab`, sign with your **upload key**. With Play App Signing (the default for new apps),
+  Google re-signs the app with the app signing key it holds. Keep the upload keystore safe: losing it means asking Google
+  to reset the upload key.
+- **ABI.** The library is built for `arm64-v8a`, as in `aimer assemble android`.
+- **Uploading** the `.aab` to Play Console is not part of `aimer package` yet; upload it in the Play Console or with
+  another tool.
 
 ### iOS and the App Store
 
