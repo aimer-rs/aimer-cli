@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aimer_cli"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "aimer_hot_reload",
  "aimer_reload_protocol",
