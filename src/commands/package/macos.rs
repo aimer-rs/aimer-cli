@@ -1,14 +1,15 @@
-//! Wrapping a macOS `.app` bundle into a `.dmg` or `.pkg`.
+//! Wrapping a macOS `.app` bundle into a `.dmg`, `.pkg`, `.tar.gz` or `.zip`.
 //!
 //! The `.dmg` itself is built by [`super::dmg`]. Every external tool is built as
 //! a plain [`Command`] and handed to the [`Reporter`], so the argument lists can
 //! be asserted without touching the machine.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, bail};
 
+use super::archive::{create_zip, tar_command};
 use super::dmg::{self, DmgRequest, ImageTool};
 use super::sign::{self, NotaryAuth, SigningPlan};
 use super::{PackageFormat, Request, dist_dir, package_stem, remove_stale};
@@ -128,13 +129,77 @@ pub(super) fn wrap_app(job: &PackageJob, reporter: &dyn Reporter) -> anyhow::Res
                 Step::new(StepKind::Other, "pkgbuild"),
             )?;
         }
+        PackageFormat::TarGz | PackageFormat::Zip => {
+            archive_app(job, &output, reporter)?;
+        }
         other => bail!("a .{} is not a macOS package", other.extension()),
     }
 
-    if let Some(auth) = job.signing.and_then(|plan| plan.notary.as_ref()) {
+    // An archive cannot carry the ticket, so for one the app itself was
+    // notarized and stapled before it went in (see `archive_app`).
+    if matches!(job.format, PackageFormat::Dmg | PackageFormat::Pkg)
+        && let Some(auth) = job.signing.and_then(|plan| plan.notary.as_ref())
+    {
         notarize(auth, &output, reporter)?;
     }
     Ok(output)
+}
+
+/// Put the app into a `.tar.gz` or `.zip`.
+///
+/// A signed app is notarized before it is archived: Apple takes the app in a
+/// throwaway zip, and the ticket is stapled to the app, so the app keeps it
+/// wherever the archive is unpacked. (A `.zip` or `.tar.gz` itself cannot be
+/// stapled.)
+fn archive_app(job: &PackageJob, output: &str, reporter: &dyn Reporter) -> anyhow::Result<()> {
+    let app = Path::new(job.app_path);
+    let bundle_name = format!("{}.app", job.app_name);
+
+    if let Some(auth) = job.signing.and_then(|plan| plan.notary.as_ref()) {
+        let submission = PathBuf::from(format!("{}/.notarize-{}.zip", job.dist, job.app_name));
+        create_zip(app, &bundle_name, &submission)?;
+        let result = notarize_and_staple_app(auth, &submission, job.app_path, reporter);
+        let _ = std::fs::remove_file(&submission);
+        result?;
+    }
+
+    reporter.note(format!("Creating {output}..."));
+    match job.format {
+        PackageFormat::Zip => create_zip(app, &bundle_name, Path::new(output)),
+        _ => {
+            // The build names the app `<application name>.app`, which is the
+            // folder `tar` puts at the top of the archive.
+            let parent = std::path::absolute(app)?
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_default();
+            reporter.run(
+                tar_command(&parent, &bundle_name, &std::path::absolute(output)?),
+                Step::new(StepKind::Other, "tar"),
+            )
+        }
+    }
+}
+
+/// Submit the zipped app, then staple the ticket to the app itself.
+fn notarize_and_staple_app(
+    auth: &NotaryAuth,
+    submission: &Path,
+    app_path: &str,
+    reporter: &dyn Reporter,
+) -> anyhow::Result<()> {
+    reporter.note(format!(
+        "Submitting {app_path} to the Apple notary service (this can take several minutes)..."
+    ));
+    reporter.run(
+        sign::notarize_command(auth, &submission.to_string_lossy()),
+        Step::new(StepKind::Other, "notarization"),
+    )?;
+    reporter.note(format!("Stapling the notarization ticket to {app_path}..."));
+    reporter.run(
+        sign::staple_command(app_path),
+        Step::new(StepKind::Other, "stapler"),
+    )
 }
 
 fn sign_app(plan: &SigningPlan, app_path: &str, reporter: &dyn Reporter) -> anyhow::Result<()> {

@@ -71,6 +71,10 @@ fn packages_are_named_after_app_version_and_architecture() {
         "My App-1.2.3-linux-aarch64.tar.gz"
     );
     assert_eq!(
+        output_name(PackageFormat::Zip, "My App", "1.2.3", "x86_64"),
+        "My App-1.2.3-linux-x86_64.zip"
+    );
+    assert_eq!(
         output_name(PackageFormat::TarGz, "My App", "", "x86_64"),
         "My App-linux-x86_64.tar.gz"
     );
@@ -117,17 +121,6 @@ fn a_bundle_without_a_desktop_entry_gets_a_minimal_one() {
     assert!(entry.contains("Exec=my_app\n"), "{entry}");
     assert!(entry.contains("Icon=my_app\n"), "{entry}");
     assert!(entry.contains("Type=Application\n"), "{entry}");
-}
-
-#[test]
-fn tar_writes_the_archive_from_the_folder_inside_the_work_directory() {
-    let cmd = tar_command(Path::new("/w"), "my_app-1.2.3", Path::new("/d/out.tar.gz"));
-
-    assert_eq!(cmd.get_program(), "tar");
-    assert_eq!(
-        args_of(&cmd),
-        ["-czf", "/d/out.tar.gz", "-C", "/w", "my_app-1.2.3"]
-    );
 }
 
 #[test]
@@ -384,4 +377,31 @@ fn a_package_from_an_earlier_run_is_removed_first() {
 
     assert!(err.to_string().contains("was not produced"), "{err}");
     assert!(!stale.exists());
+}
+
+#[test]
+fn a_zip_is_the_bundle_under_a_clean_folder_and_needs_no_external_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = bundle(dir.path(), true, true);
+    let dist = dir.path().join("dist");
+    let dist = dist.to_str().unwrap();
+    let spy = SpyReporter::new();
+
+    let out = package_bundle(&job(PackageFormat::Zip, &bundle, dist, None), &spy).unwrap();
+
+    assert!(
+        out.ends_with(&format!("My App-1.2.3-linux-{}.zip", appimage_arch())),
+        "{out}"
+    );
+    let zip = std::fs::read(&out).unwrap();
+    let text = String::from_utf8_lossy(&zip);
+    for name in [
+        "my_app-1.2.3/my_app",
+        "my_app-1.2.3/assets/img/logo.png",
+        "my_app-1.2.3/app.png",
+    ] {
+        assert!(text.contains(name), "{name}");
+    }
+    assert!(spy.steps().is_empty());
+    assert!(!Path::new(dist).join(WORK_DIR_NAME).exists());
 }

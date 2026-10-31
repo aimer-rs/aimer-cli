@@ -29,6 +29,76 @@ fn ios_defaults_to_ipa() {
 }
 
 #[test]
+fn windows_defaults_to_the_setup_exe() {
+    let request = resolve_request(&options("windows")).unwrap();
+
+    assert_eq!(request.target, Targets::Windows);
+    assert_eq!(request.format, PackageFormat::Exe);
+}
+
+#[test]
+fn windows_can_also_make_an_msi_or_a_zip() {
+    for format in [PackageFormat::Msi, PackageFormat::Zip] {
+        let request = resolve_request(&PackageOptions {
+            format: Some(format),
+            ..options("windows")
+        })
+        .unwrap();
+        assert_eq!(request.format, format);
+    }
+}
+
+#[test]
+fn zip_and_tar_gz_are_offered_where_the_platform_can_use_them() {
+    let supported = |format: PackageFormat, platform: &str| {
+        resolve_request(&PackageOptions {
+            format: Some(format),
+            ..options(platform)
+        })
+        .is_ok()
+    };
+
+    for platform in ["macos", "linux", "windows"] {
+        assert!(supported(PackageFormat::Zip, platform), "zip on {platform}");
+    }
+    for platform in ["macos", "linux"] {
+        assert!(
+            supported(PackageFormat::TarGz, platform),
+            "tar.gz on {platform}"
+        );
+    }
+    for platform in ["windows", "ios", "android"] {
+        assert!(
+            !supported(PackageFormat::TarGz, platform),
+            "tar.gz on {platform}"
+        );
+    }
+    for platform in ["ios", "android"] {
+        assert!(
+            !supported(PackageFormat::Zip, platform),
+            "zip on {platform}"
+        );
+    }
+}
+
+#[test]
+fn the_windows_installers_are_for_windows_only() {
+    for format in [PackageFormat::Exe, PackageFormat::Msi] {
+        for platform in ["macos", "linux", "ios", "android"] {
+            let err = resolve_request(&PackageOptions {
+                format: Some(format),
+                ..options(platform)
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("not available"),
+                "{platform}: {err}"
+            );
+        }
+    }
+}
+
+#[test]
 fn linux_defaults_to_appimage() {
     let request = resolve_request(&options("linux")).unwrap();
 
@@ -48,18 +118,20 @@ fn linux_can_also_make_a_tar_gz() {
 }
 
 #[test]
-fn signing_flags_do_not_apply_to_linux() {
-    for flags in [(true, false), (false, true), (true, true)] {
-        let err = resolve_request(&PackageOptions {
-            sign: flags.0,
-            notarize: flags.1,
-            ..options("linux")
-        })
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("macOS") || err.to_string().contains("not available"),
-            "{flags:?}: {err}"
-        );
+fn signing_flags_do_not_apply_to_linux_or_windows() {
+    for platform in ["linux", "windows"] {
+        for flags in [(true, false), (false, true), (true, true)] {
+            let err = resolve_request(&PackageOptions {
+                sign: flags.0,
+                notarize: flags.1,
+                ..options(platform)
+            })
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("macOS") || err.to_string().contains("not available"),
+                "{platform} {flags:?}: {err}"
+            );
+        }
     }
 }
 
@@ -130,6 +202,10 @@ fn a_format_must_belong_to_the_platform() {
         ("ios", PackageFormat::Pkg),
         ("ios", PackageFormat::Apk),
         ("android", PackageFormat::Dmg),
+        ("macos", PackageFormat::Appimage),
+        ("windows", PackageFormat::Dmg),
+        ("windows", PackageFormat::Appimage),
+        ("linux", PackageFormat::Exe),
         ("android", PackageFormat::Ipa),
         ("ios", PackageFormat::Appimage),
         ("android", PackageFormat::TarGz),
@@ -148,7 +224,7 @@ fn a_format_must_belong_to_the_platform() {
 
 #[test]
 fn platforms_without_packaging_are_rejected() {
-    for platform in ["windows", "web"] {
+    for platform in ["web"] {
         let err = resolve_request(&options(platform)).unwrap_err();
         assert!(
             err.to_string().contains("not supported yet"),
@@ -227,4 +303,7 @@ fn formats_map_to_their_file_extension() {
     assert_eq!(PackageFormat::Apk.extension(), "apk");
     assert_eq!(PackageFormat::Appimage.extension(), "AppImage");
     assert_eq!(PackageFormat::TarGz.extension(), "tar.gz");
+    assert_eq!(PackageFormat::Zip.extension(), "zip");
+    assert_eq!(PackageFormat::Exe.extension(), "exe");
+    assert_eq!(PackageFormat::Msi.extension(), "msi");
 }

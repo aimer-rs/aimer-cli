@@ -1,4 +1,4 @@
-//! Packaging a Linux app into an `.AppImage` or a `.tar.gz`.
+//! Packaging a Linux app into an `.AppImage`, a `.tar.gz` or a `.zip`.
 //!
 //! Both start from the portable bundle `aimer assemble linux` makes: a folder
 //! holding the executable, the registered assets, the icon (`app.png`) and the
@@ -6,7 +6,7 @@
 //! layout is kept intact inside either package.
 //!
 //! * A **`.tar.gz`** is the bundle under a clean top-level folder, compressed
-//!   with `tar`.
+//!   with `tar`; a **`.zip`** is the same folder, zipped.
 //! * An **`.AppImage`** is an `AppDir`, which `appimagetool` turns into a
 //!   single runnable file. The bundle goes to `usr/bin/`, next to which sit the
 //!   `AppRun` launcher, the desktop entry and the icon that the format
@@ -22,6 +22,8 @@ use std::process::Command;
 
 use anyhow::{Context, bail};
 
+use super::archive::{copy_dir, create_zip, tar_command};
+use super::tools::{self, ToolSpec};
 use super::{PackageFormat, Request, dist_dir, package_stem, remove_stale, reset_dir};
 use crate::commands::assemble::{self, Reporter, StdioReporter, Step, StepKind, profile_name};
 use crate::config::{AimerManifest, resolve_cargo_package_name};
@@ -106,34 +108,22 @@ pub(super) fn locate_appimagetool(
     env: &dyn Fn(&str) -> Option<String>,
     is_file: &dyn Fn(&Path) -> bool,
 ) -> anyhow::Result<PathBuf> {
-    if let Some(path) = env(ENV_APPIMAGETOOL).filter(|p| !p.trim().is_empty()) {
-        let path = PathBuf::from(path.trim());
-        if is_file(&path) {
-            return Ok(path);
-        }
-        bail!(
-            "{ENV_APPIMAGETOOL} is set to '{}', which is not a file",
-            path.display()
-        );
-    }
     // The release page ships it as `appimagetool-<arch>.AppImage`.
-    let names = [
-        "appimagetool".to_string(),
-        format!("appimagetool-{}.AppImage", appimage_arch()),
-    ];
-    if let Some(search) = env("PATH") {
-        for dir in std::env::split_paths(&search) {
-            for name in &names {
-                let candidate = dir.join(name);
-                if is_file(&candidate) {
-                    return Ok(candidate);
-                }
-            }
-        }
-    }
-    bail!(
-        "appimagetool was not found: download it from {APPIMAGETOOL_URL}, make it executable and \
-         put it on PATH as `appimagetool`, or set {ENV_APPIMAGETOOL} to its path"
+    let download = format!("appimagetool-{}.AppImage", appimage_arch());
+    let how_to_get = format!(
+        "download it from {APPIMAGETOOL_URL}, make it executable and put it on PATH as \
+         `appimagetool`"
+    );
+    tools::locate(
+        &ToolSpec {
+            name: "appimagetool",
+            env_var: ENV_APPIMAGETOOL,
+            file_names: &["appimagetool", &download],
+            extra_dirs: Vec::new(),
+            how_to_get: &how_to_get,
+        },
+        env,
+        is_file,
     )
 }
 
@@ -155,7 +145,7 @@ pub(super) fn arch_name(rust_arch: &'static str) -> &'static str {
 ///
 /// An AppImage is named `<app>-<version>-<arch>.AppImage`, the usual
 /// convention; an archive adds `linux`, since it is not self-describing:
-/// `<app>-<version>-linux-<arch>.tar.gz`.
+/// `<app>-<version>-linux-<arch>.tar.gz` or `.zip`.
 pub(super) fn output_name(
     format: PackageFormat,
     app_name: &str,
@@ -164,7 +154,9 @@ pub(super) fn output_name(
 ) -> String {
     let stem = package_stem(app_name, version);
     match format {
-        PackageFormat::TarGz => format!("{stem}-linux-{arch}.{}", format.extension()),
+        PackageFormat::TarGz | PackageFormat::Zip => {
+            format!("{stem}-linux-{arch}.{}", format.extension())
+        }
         _ => format!("{stem}-{arch}.{}", format.extension()),
     }
 }
@@ -186,6 +178,14 @@ pub(super) fn package_bundle(job: &LinuxJob, reporter: &dyn Reporter) -> anyhow:
 
     let result = match job.format {
         PackageFormat::TarGz => tar_gz(job, &work, &output_abs, reporter),
+        PackageFormat::Zip => {
+            reporter.note(format!("Creating {}...", output_abs.display()));
+            create_zip(
+                job.bundle,
+                &package_stem(job.pkg_name, job.version),
+                &output_abs,
+            )
+        }
         _ => app_image(job, &work, &output_abs, reporter),
     };
     // The scratch folder is a full copy of the bundle; never leave it behind.
@@ -326,13 +326,6 @@ pub(super) fn default_desktop_entry(pkg_name: &str, app_name: &str) -> String {
     )
 }
 
-/// `tar` writing `output` from the folder `top` inside `parent`.
-pub(super) fn tar_command(parent: &Path, top: &str, output: &Path) -> Command {
-    let mut cmd = Command::new("tar");
-    cmd.arg("-czf").arg(output).arg("-C").arg(parent).arg(top);
-    cmd
-}
-
 /// `appimagetool` turning `app_dir` into `output`.
 ///
 /// `appimagetool` is itself an AppImage, which needs FUSE to start;
@@ -347,25 +340,6 @@ pub(super) fn appimagetool_command(tool: &Path, app_dir: &Path, output: &Path) -
         .env("ARCH", appimage_arch())
         .env("APPIMAGE_EXTRACT_AND_RUN", "1");
     cmd
-}
-
-/// Copy `src` into `dest`, creating it, directories and all.
-fn copy_dir(src: &Path, dest: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
-    for entry in std::fs::read_dir(src).with_context(|| format!("reading {}", src.display()))? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dest.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&from, &to)?;
-        } else {
-            // `copy` carries the permission bits over, so the executable stays
-            // executable.
-            std::fs::copy(&from, &to)
-                .with_context(|| format!("copying {} -> {}", from.display(), to.display()))?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(unix)]

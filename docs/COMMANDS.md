@@ -138,9 +138,17 @@ aimer assemble android -p moewmoew
 
 ## `aimer package`
 
-Builds the app and wraps it in a distributable package: a `.dmg` disk image or a `.pkg` installer on macOS, an `.ipa` on
-iOS, a signed `.aab` or `.apk` on Android, and an `.AppImage` or `.tar.gz` on Linux. The Apple platforms need a macOS host,
-Linux needs a Linux host, and Android works on any host.
+Builds the app and wraps it in a distributable package:
+
+| Platform | Formats (the first is the default)         | Host    |
+| -------- | ------------------------------------------ | ------- |
+| macOS    | `dmg`, `pkg`, `tar.gz`, `zip`              | macOS   |
+| iOS      | `ipa`                                      | macOS   |
+| Android  | `aab`, `apk`                               | any     |
+| Linux    | `appimage`, `tar.gz`, `zip`                | Linux   |
+| Windows  | `exe`, `msi`, `zip`                        | Windows |
+
+Desktop targets are never cross-compiled, so Linux and Windows packages are made on their own platform.
 
 ```bash
 aimer package [OPTIONS] <PLATFORM>
@@ -148,12 +156,13 @@ aimer package [OPTIONS] <PLATFORM>
 
 **Arguments:**
 
-- `<PLATFORM>`: Target platform to package: `macos`, `ios`, `android` or `linux`.
+- `<PLATFORM>`: Target platform to package: `macos`, `ios`, `android`, `linux` or `windows`.
 
 **Options:**
 
 - `-f, --format <FORMAT>`: Package format: `dmg` or `pkg` on macOS (default `dmg`), `ipa` on iOS (default), `aab` or
-  `apk` on Android (default `aab`), `appimage` or `tar.gz` on Linux (default `appimage`).
+  `apk` on Android (default `aab`), `appimage`, `tar.gz` or `zip` on Linux (default `appimage`), `exe`, `msi` or `zip` on
+  Windows (default `exe`). `tar.gz` also works on macOS, and `zip` on macOS, Linux and Windows.
 - `-r, --release`: Package a release build. This is the default, so the flag only states it explicitly.
 - `--debug`: Package a debug build instead (macOS and iOS; Android packages are always release builds). Cannot be
   combined with `--release`.
@@ -165,7 +174,7 @@ aimer package [OPTIONS] <PLATFORM>
 Unlike `build` and `assemble`, `package` builds in release mode unless `--debug` is given, since a package is meant for
 distribution.
 
-The package is written to `builds/<macos|ios|android|linux>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
+The package is written to `builds/<macos|ios|android|linux|windows>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
 name and `<version>` comes from `Aimer.toml` (omitted when empty).
 
 - **`dmg`**: a compressed disk image holding the `.app` next to an `Applications` shortcut. Opening it shows an install
@@ -176,6 +185,9 @@ name and `<version>` comes from `Aimer.toml` (omitted when empty).
   is printed and a plain image is created instead.
 - **`pkg`**: a flat installer that places the `.app` in `/Applications` (`pkgbuild`). The package identifier and version
   are read from the app's `Info.plist`.
+
+- **`tar.gz`** and **`zip`**: the `.app` in an archive, at the top level as `<Name>.app`, for download pages and package
+  managers. The zip is written by `aimer` itself and keeps permissions and symbolic links; the `.tar.gz` is made by `tar`.
 
 Without `--sign`, packages are not code-signed or notarized, so other Macs show a Gatekeeper warning when opening them.
 
@@ -195,6 +207,41 @@ aimer package macos --notarize
 aimer package macos --debug
 ```
 
+### Windows
+
+`aimer package windows` builds the app and packages the portable bundle (the folder `aimer assemble windows` makes: the
+executable, the registered assets, `app.ico` and the manifest).
+
+```bash
+aimer package windows              # <name>-<version>-<arch>-setup.exe
+aimer package windows -f msi       # <name>-<version>-<arch>.msi
+aimer package windows -f zip       # <name>-<version>-windows-<arch>.zip
+```
+
+- **`exe`** (default): a setup program built by [Inno Setup](https://jrsoftware.org/isdl.php) (6.3 or later) from a
+  generated script. It installs **per user** by default, without an administrator prompt, and offers an all-users install
+  in a dialog. It adds a Start menu entry, an optional desktop shortcut, an uninstaller with the app icon, and a "launch"
+  checkbox on the last page.
+- **`msi`**: a Windows Installer package built by the [WiX Toolset](https://wixtoolset.org) v4 or later (`wix build`,
+  installed with `dotnet tool install --global wix`; WiX 3's `candle` and `light` are not supported) from a generated
+  source. It installs **per machine** under `Program Files`, the form IT departments deploy with Group Policy or Intune,
+  and adds a Start menu shortcut. The `version` in `Aimer.toml` must fit an MSI version, `major.minor.build` up to
+  `255.255.65535` (a suffix such as `-beta` is dropped); a version that does not fit is reported before the build.
+- **`zip`**: the bundle in a folder named `<package>-<version>`, zipped. No tool is needed.
+
+Things to know:
+
+- **The tools are not downloaded.** `ISCC.exe` is looked for in `AIMER_ISCC`, on `PATH`, then in the folder Inno Setup
+  installs to (`Program Files (x86)\Inno Setup 6`, or `%LOCALAPPDATA%\Programs\Inno Setup 6`). `wix` is looked for in
+  `AIMER_WIX`, on `PATH`, then in `%USERPROFILE%\.dotnet\tools`. A missing tool is reported before the build starts.
+- **Upgrades.** Both installers carry an id derived from the app's `group` (or package name), the same on every build, so a
+  newer installer replaces an installed copy instead of installing beside it. Keep `group` stable.
+- **Not signed yet.** `--sign` is rejected for Windows, and an unsigned installer from an unknown publisher makes Windows
+  SmartScreen show a warning.
+- **The C runtime.** A Rust MSVC build needs the Visual C++ runtime on the user's machine. Link it statically
+  (`-C target-feature=+crt-static`) or have users install the redistributable, or the app may not start.
+- **Architecture.** File names carry it (`x64`, `arm64`); build on the architecture you ship.
+
 ### Linux
 
 `aimer package linux` builds the app and packages the portable bundle (the folder `aimer assemble linux` makes: the
@@ -203,6 +250,7 @@ executable, the registered assets, the icon and the desktop entry).
 ```bash
 aimer package linux               # <name>-<version>-<arch>.AppImage
 aimer package linux -f tar.gz     # <name>-<version>-linux-<arch>.tar.gz
+aimer package linux -f zip        # <name>-<version>-linux-<arch>.zip
 ```
 
 - **`appimage`** (default): one file that runs on most distributions without installing. The bundle is laid out as an
@@ -214,6 +262,7 @@ aimer package linux -f tar.gz     # <name>-<version>-linux-<arch>.tar.gz
   `appstreamcli` is not needed.
 - **`tar.gz`**: the bundle in a folder named `<package>-<version>`, compressed with `tar`. Unpack it anywhere and run the
   executable.
+- **`zip`**: the same folder, zipped by `aimer` itself (no `zip` tool needed), keeping the executable's permissions.
 
 Things to know:
 
@@ -352,6 +401,10 @@ the notary credentials are accepted, so a mistake fails in seconds instead of af
 The steps, in order: sign the `.app` with the hardened runtime and verify it; build the `.dmg` (and sign it) or the
 `.pkg` (signed by `pkgbuild`); with `--notarize`, submit it with `xcrun notarytool submit --wait`, then
 `xcrun stapler staple`. Notarizing the package covers the app inside it; the app itself is not stapled separately.
+
+A `.zip` or `.tar.gz` cannot carry a stapled ticket, so for those formats the **app** is notarized and stapled first
+(submitted in a temporary zip), and the archive is made from the stapled app. The ticket therefore travels with the app
+wherever the archive is unpacked.
 
 ---
 

@@ -297,12 +297,14 @@ enum Commands {
         release: bool,
     },
 
-    /// Package the app: .dmg/.pkg (macOS), .ipa (iOS), .aab/.apk (Android), .AppImage/.tar.gz (Linux)
+    /// Package the app: .dmg/.pkg/.tar.gz/.zip (macOS), .ipa (iOS), .aab/.apk (Android),
+    /// .AppImage/.tar.gz/.zip (Linux), .exe/.msi/.zip (Windows)
     Package {
-        /// Target platform to package for (macos, ios, android or linux)
+        /// Target platform to package for (macos, ios, android, linux or windows)
         #[arg(value_enum)]
         platform: Targets,
-        /// Package format (default: dmg on macOS, ipa on iOS, aab on Android, appimage on Linux)
+        /// Package format (default: dmg on macOS, ipa on iOS, aab on Android, appimage on
+        /// Linux, exe on Windows)
         #[arg(short, long, value_enum)]
         format: Option<commands::package::PackageFormat>,
         /// Select an Aimer package in the Cargo workspace.
@@ -706,10 +708,23 @@ mod tests {
             ("appimage", PackageFormat::Appimage),
             ("tar.gz", PackageFormat::TarGz),
             ("tar-gz", PackageFormat::TarGz),
+            ("zip", PackageFormat::Zip),
         ] {
             let linux = Cli::try_parse_from(["aimer", "package", "linux", "-f", value]).unwrap();
             assert!(
                 matches!(linux.command, Some(Commands::Package { format: Some(f), .. }) if f == expected),
+                "{value}"
+            );
+        }
+        for (value, expected) in [
+            ("exe", PackageFormat::Exe),
+            ("msi", PackageFormat::Msi),
+            ("zip", PackageFormat::Zip),
+        ] {
+            let windows =
+                Cli::try_parse_from(["aimer", "package", "windows", "-f", value]).unwrap();
+            assert!(
+                matches!(windows.command, Some(Commands::Package { format: Some(f), .. }) if f == expected),
                 "{value}"
             );
         }

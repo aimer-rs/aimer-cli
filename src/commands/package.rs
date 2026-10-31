@@ -1,4 +1,5 @@
 mod android;
+mod archive;
 mod dmg;
 mod ios;
 mod linux;
@@ -8,6 +9,8 @@ mod sign;
 mod test_support;
 #[cfg(test)]
 mod tests;
+mod tools;
+mod windows;
 
 use std::path::Path;
 
@@ -35,9 +38,15 @@ pub enum PackageFormat {
     /// A single-file Linux app that runs on most distributions.
     #[value(name = "appimage")]
     Appimage,
-    /// The portable Linux bundle, compressed.
+    /// The app folder, compressed with `tar` (macOS and Linux).
     #[value(name = "tar.gz", alias = "tar-gz")]
     TarGz,
+    /// The app folder, zipped (macOS, Linux and Windows).
+    Zip,
+    /// A Windows setup program, built with Inno Setup.
+    Exe,
+    /// A Windows Installer package, built with the WiX Toolset.
+    Msi,
 }
 
 impl PackageFormat {
@@ -51,6 +60,9 @@ impl PackageFormat {
             PackageFormat::Apk => "apk",
             PackageFormat::Appimage => "AppImage",
             PackageFormat::TarGz => "tar.gz",
+            PackageFormat::Zip => "zip",
+            PackageFormat::Exe => "exe",
+            PackageFormat::Msi => "msi",
         }
     }
 
@@ -63,6 +75,7 @@ impl PackageFormat {
             Targets::Ios => Some(PackageFormat::Ipa),
             Targets::Android => Some(PackageFormat::Aab),
             Targets::Linux => Some(PackageFormat::Appimage),
+            Targets::Windows => Some(PackageFormat::Exe),
             _ => None,
         }
     }
@@ -73,7 +86,12 @@ impl PackageFormat {
             PackageFormat::Dmg | PackageFormat::Pkg => target == Targets::Macos,
             PackageFormat::Ipa => target == Targets::Ios,
             PackageFormat::Aab | PackageFormat::Apk => target == Targets::Android,
-            PackageFormat::Appimage | PackageFormat::TarGz => target == Targets::Linux,
+            PackageFormat::Appimage => target == Targets::Linux,
+            PackageFormat::TarGz => matches!(target, Targets::Macos | Targets::Linux),
+            PackageFormat::Zip => {
+                matches!(target, Targets::Macos | Targets::Linux | Targets::Windows)
+            }
+            PackageFormat::Exe | PackageFormat::Msi => target == Targets::Windows,
         }
     }
 }
@@ -84,6 +102,7 @@ pub(crate) fn dist_dir(target: Targets, release: bool) -> String {
         Targets::Ios => "ios",
         Targets::Android => "android",
         Targets::Linux => "linux",
+        Targets::Windows => "windows",
         _ => "macos",
     };
     format!("builds/{platform}/dist/{}", profile_name(release))
@@ -159,7 +178,7 @@ pub(crate) fn resolve_request(options: &PackageOptions) -> anyhow::Result<Reques
         Targets::try_from(platform).map_err(|_| AimerError::UnknownTarget(platform.to_string()))?;
     let Some(default) = PackageFormat::default_for(target) else {
         bail!(
-            "packaging for '{target}' is not supported yet; only 'macos', 'ios', 'android' and 'linux' can be packaged"
+            "packaging for '{target}' is not supported yet; only 'macos', 'ios', 'android', 'linux' and 'windows' can be packaged"
         );
     };
     let format = options.format.unwrap_or(default);
@@ -175,11 +194,11 @@ pub(crate) fn resolve_request(options: &PackageOptions) -> anyhow::Result<Reques
     if target == Targets::Android && options.notarize {
         bail!("--notarize applies to macOS packages only");
     }
-    if target == Targets::Linux && options.notarize {
+    if matches!(target, Targets::Linux | Targets::Windows) && options.notarize {
         bail!("--notarize applies to macOS packages only");
     }
-    if target == Targets::Linux && options.sign {
-        bail!("code signing is not available for Linux packages yet");
+    if matches!(target, Targets::Linux | Targets::Windows) && options.sign {
+        bail!("code signing is not available for {target} packages yet");
     }
     if target == Targets::Android && !options.release {
         bail!(
@@ -201,15 +220,21 @@ pub(crate) fn resolve_request(options: &PackageOptions) -> anyhow::Result<Reques
 }
 
 /// `aimer package <platform>`: build the app, then wrap it in a distributable
-/// package: a `.dmg` (the default) or `.pkg` on macOS, an `.ipa` on iOS, and an
-/// `.aab` (the default) or `.apk` on Android, and an `.AppImage` (the default) or
-/// `.tar.gz` on Linux.
+/// package.
+///
+/// | Platform | Formats (the first is the default)          |
+/// |----------|---------------------------------------------|
+/// | macOS    | `.dmg`, `.pkg`, `.tar.gz`, `.zip`           |
+/// | iOS      | `.ipa`                                      |
+/// | Android  | `.aab`, `.apk`                              |
+/// | Linux    | `.AppImage`, `.tar.gz`, `.zip`              |
+/// | Windows  | `.exe`, `.msi`, `.zip`                      |
 ///
 /// On macOS, `sign` signs the app and the package with the identities from
 /// `[macos.signing]`, and `notarize` implies `sign` and also has Apple notarize
-/// the package and staples the ticket to it. On iOS the app is always signed
-/// (`[ios.signing]`), and `upload` sends the build to App Store Connect. On
-/// Android the package is always a signed release build (`[android.signing]`).
+/// it and staples the ticket. On iOS the app is always signed (`[ios.signing]`),
+/// and `upload` sends the build to App Store Connect. On Android the package is
+/// always a signed release build (`[android.signing]`).
 pub fn execute_with_package(options: PackageOptions) -> anyhow::Result<()> {
     let request = resolve_request(&options)?;
     // Apple's packages are made with Xcode tooling and Linux's with the host's
@@ -218,6 +243,7 @@ pub fn execute_with_package(options: PackageOptions) -> anyhow::Result<()> {
     let host_ok = match request.target {
         Targets::Android => true,
         Targets::Linux => cfg!(target_os = "linux"),
+        Targets::Windows => cfg!(target_os = "windows"),
         _ => cfg!(target_os = "macos"),
     };
     if !host_ok {
@@ -225,10 +251,10 @@ pub fn execute_with_package(options: PackageOptions) -> anyhow::Result<()> {
             "packaging a '{}' app into a .{} needs a {} host",
             request.target,
             request.format.extension(),
-            if request.target == Targets::Linux {
-                "Linux"
-            } else {
-                "macOS"
+            match request.target {
+                Targets::Linux => "Linux",
+                Targets::Windows => "Windows",
+                _ => "macOS",
             }
         );
     }
@@ -242,6 +268,7 @@ pub fn execute_with_package(options: PackageOptions) -> anyhow::Result<()> {
         Targets::Ios => ios::run(&request, manifest.as_ref())?,
         Targets::Android => android::run(&request, manifest.as_ref())?,
         Targets::Linux => linux::run(&request, manifest.as_ref())?,
+        Targets::Windows => windows::run(&request, manifest.as_ref())?,
         _ => macos::run(&request, manifest.as_ref())?,
     };
 
