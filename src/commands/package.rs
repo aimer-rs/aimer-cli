@@ -97,15 +97,13 @@ impl PackageFormat {
 }
 
 /// Where the packages of a build mode are written, relative to the project root.
-pub(crate) fn dist_dir(target: Targets, release: bool) -> String {
-    let platform = match target {
-        Targets::Ios => "ios",
-        Targets::Android => "android",
-        Targets::Linux => "linux",
-        Targets::Windows => "windows",
-        _ => "macos",
-    };
-    format!("builds/{platform}/dist/{}", profile_name(release))
+///
+/// Every platform writes to the same folder, `builds/dist/<release|debug>`, so
+/// the packages of a release are in one place. Their names already tell the
+/// platforms apart (`-linux-`, `-windows-`, `-x64-setup`, the extension), so
+/// none overwrites another.
+pub(crate) fn dist_dir(release: bool) -> String {
+    format!("builds/dist/{}", profile_name(release))
 }
 
 /// File name (without extension) of a package: `<app>-<version>`, or just the

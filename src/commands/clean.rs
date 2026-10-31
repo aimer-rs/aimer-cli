@@ -15,6 +15,7 @@ pub fn execute() -> anyhow::Result<()> {
         Path::new("builds/ios/Libraries"),
         Path::new("builds/android/app/build"),
         Path::new("builds/android/app/src/main/jniLibs"),
+        Path::new("builds/dist"),
     ];
 
     for build in build_paths {

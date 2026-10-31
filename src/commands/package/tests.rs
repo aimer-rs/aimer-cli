@@ -284,14 +284,33 @@ fn package_stem_appends_a_version_only_when_there_is_one() {
 }
 
 #[test]
-fn packages_land_in_a_per_platform_and_profile_dist_directory() {
-    assert_eq!(dist_dir(Targets::Macos, false), "builds/macos/dist/debug");
-    assert_eq!(dist_dir(Targets::Macos, true), "builds/macos/dist/release");
-    assert_eq!(dist_dir(Targets::Ios, true), "builds/ios/dist/release");
-    assert_eq!(
-        dist_dir(Targets::Android, true),
-        "builds/android/dist/release"
-    );
+fn every_platform_writes_to_the_same_dist_folder_per_build_mode() {
+    assert_eq!(dist_dir(true), "builds/dist/release");
+    assert_eq!(dist_dir(false), "builds/dist/debug");
+}
+
+#[test]
+fn package_names_never_collide_across_platforms() {
+    use crate::commands::package::{linux, windows};
+    let names = [
+        linux::output_name(PackageFormat::Appimage, "App", "1.0.0", "x86_64"),
+        linux::output_name(PackageFormat::TarGz, "App", "1.0.0", "x86_64"),
+        linux::output_name(PackageFormat::Zip, "App", "1.0.0", "x86_64"),
+        windows::output_name(PackageFormat::Exe, "App", "1.0.0", "x64"),
+        windows::output_name(PackageFormat::Msi, "App", "1.0.0", "x64"),
+        windows::output_name(PackageFormat::Zip, "App", "1.0.0", "x64"),
+        // macOS, iOS and Android packages are `<app>-<version>.<ext>`.
+        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Dmg.extension()),
+        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Pkg.extension()),
+        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Zip.extension()),
+        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::TarGz.extension()),
+        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Ipa.extension()),
+        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Aab.extension()),
+        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Apk.extension()),
+    ];
+
+    let unique: std::collections::HashSet<_> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
 }
 
 #[test]

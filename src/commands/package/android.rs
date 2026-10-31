@@ -267,7 +267,7 @@ pub(super) fn run(request: &Request, manifest: Option<&AimerManifest>) -> anyhow
     assemble::stage_android_inputs(&pkg_name, &android, true, &reporter)?;
 
     let app_name = assemble::app_name();
-    let dist = dist_dir(request.target, true);
+    let dist = dist_dir(true);
     let project_dir = android_project_dir();
     let job = ArtifactJob {
         format: request.format,

@@ -174,8 +174,10 @@ aimer package [OPTIONS] <PLATFORM>
 Unlike `build` and `assemble`, `package` builds in release mode unless `--debug` is given, since a package is meant for
 distribution.
 
-The package is written to `builds/<macos|ios|android|linux|windows>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
-name and `<version>` comes from `Aimer.toml` (omitted when empty).
+Every package is written to **`builds/dist/<release|debug>/`**, whatever the platform. Files are named
+`<name>-<version>.<ext>` on Apple platforms and Android, with the architecture added on Linux and Windows, where `<name>`
+is the application name and `<version>` comes from `Aimer.toml` (omitted when empty). The folder is in the scaffolded
+`.gitignore`, and `aimer clean` removes it.
 
 - **`dmg`**: a compressed disk image holding the `.app` next to an `Applications` shortcut. Opening it shows an install
   window ("To install, drag *App* to Applications") whose background gradient is tinted with the colors of the app's
@@ -282,7 +284,7 @@ Android App Bundle that Google Play requires for new apps, the default) or an **
 directly or for other stores).
 
 ```bash
-aimer package android            # builds/android/dist/release/<name>-<version>.aab
+aimer package android            # builds/dist/release/<name>-<version>.aab
 aimer package android -f apk     # ... or an .apk
 ```
 
@@ -363,7 +365,7 @@ allow_provisioning_updates = true # see below
 - **The bundle ID** is the `group` of `Aimer.toml`, and the app has to exist in App Store Connect before an upload.
 - **`--upload`** runs a second export whose destination is App Store Connect. It needs the `app-store-connect` method
   and a release build. Xcode manages the build number on upload, so a repeated upload of the same version does not
-  clash. The `.ipa` stays in `builds/ios/dist/` either way.
+  clash. The `.ipa` stays in `builds/dist/` either way.
 - **The other methods** (`release-testing`, `enterprise`, `debugging`) only write the `.ipa`.
 
 ### Signing and notarization

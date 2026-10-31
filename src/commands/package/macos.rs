@@ -55,7 +55,7 @@ pub(super) fn run(request: &Request, manifest: Option<&AimerManifest>) -> anyhow
         .map(|manifest| manifest.package.version.clone())
         .unwrap_or_default();
     let app_name = assemble::app_name();
-    let dist = dist_dir(request.target, release);
+    let dist = dist_dir(release);
     let job = PackageJob {
         format,
         app_path: &app_path,

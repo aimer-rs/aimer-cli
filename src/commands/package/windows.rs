@@ -91,7 +91,7 @@ pub(super) fn run(request: &Request, manifest: Option<&AimerManifest>) -> anyhow
     let bundle = assemble::package_desktop(Targets::Windows, &pkg_name, release, &reporter)?;
 
     let app_name = assemble::app_name();
-    let dist = dist_dir(request.target, release);
+    let dist = dist_dir(release);
     let bundle = std::path::absolute(&bundle).context("resolving the bundle")?;
     let job = WindowsJob {
         format: request.format,

@@ -23,4 +23,7 @@ Cargo.lock
 # windows
 builds/windows/bundle
 
+# packages made by `aimer package`
+builds/dist
+
 # add another ignore here -_-
