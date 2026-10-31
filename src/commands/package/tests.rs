@@ -29,6 +29,58 @@ fn ios_defaults_to_ipa() {
 }
 
 #[test]
+fn linux_defaults_to_appimage() {
+    let request = resolve_request(&options("linux")).unwrap();
+
+    assert_eq!(request.target, Targets::Linux);
+    assert_eq!(request.format, PackageFormat::Appimage);
+}
+
+#[test]
+fn linux_can_also_make_a_tar_gz() {
+    let request = resolve_request(&PackageOptions {
+        format: Some(PackageFormat::TarGz),
+        ..options("linux")
+    })
+    .unwrap();
+
+    assert_eq!(request.format, PackageFormat::TarGz);
+}
+
+#[test]
+fn signing_flags_do_not_apply_to_linux() {
+    for flags in [(true, false), (false, true), (true, true)] {
+        let err = resolve_request(&PackageOptions {
+            sign: flags.0,
+            notarize: flags.1,
+            ..options("linux")
+        })
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("macOS") || err.to_string().contains("not available"),
+            "{flags:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_linux_package_is_not_built_for_other_platforms_formats() {
+    let err = resolve_request(&PackageOptions {
+        format: Some(PackageFormat::Dmg),
+        ..options("linux")
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("not available"), "{err}");
+
+    let err = resolve_request(&PackageOptions {
+        format: Some(PackageFormat::Appimage),
+        ..options("macos")
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("not available"), "{err}");
+}
+
+#[test]
 fn android_defaults_to_aab() {
     let request = resolve_request(&options("android")).unwrap();
 
@@ -79,6 +131,8 @@ fn a_format_must_belong_to_the_platform() {
         ("ios", PackageFormat::Apk),
         ("android", PackageFormat::Dmg),
         ("android", PackageFormat::Ipa),
+        ("ios", PackageFormat::Appimage),
+        ("android", PackageFormat::TarGz),
     ] {
         let err = resolve_request(&PackageOptions {
             format: Some(format),
@@ -94,7 +148,7 @@ fn a_format_must_belong_to_the_platform() {
 
 #[test]
 fn platforms_without_packaging_are_rejected() {
-    for platform in ["windows", "linux", "web"] {
+    for platform in ["windows", "web"] {
         let err = resolve_request(&options(platform)).unwrap_err();
         assert!(
             err.to_string().contains("not supported yet"),
@@ -171,4 +225,6 @@ fn formats_map_to_their_file_extension() {
     assert_eq!(PackageFormat::Ipa.extension(), "ipa");
     assert_eq!(PackageFormat::Aab.extension(), "aab");
     assert_eq!(PackageFormat::Apk.extension(), "apk");
+    assert_eq!(PackageFormat::Appimage.extension(), "AppImage");
+    assert_eq!(PackageFormat::TarGz.extension(), "tar.gz");
 }

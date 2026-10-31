@@ -11,7 +11,7 @@ use anyhow::{Context, bail};
 
 use super::dmg::{self, DmgRequest, ImageTool};
 use super::sign::{self, NotaryAuth, SigningPlan};
-use super::{PackageFormat, Request, dist_dir, package_stem};
+use super::{PackageFormat, Request, dist_dir, package_stem, remove_stale};
 use crate::commands::assemble::{self, Reporter, StdioReporter, Step, StepKind, profile_name};
 use crate::config::{AimerManifest, resolve_cargo_package_name};
 
@@ -162,16 +162,6 @@ fn notarize(auth: &NotaryAuth, artifact: &str, reporter: &dyn Reporter) -> anyho
         sign::staple_command(artifact),
         Step::new(StepKind::Other, "stapler"),
     )
-}
-
-/// Remove a package left over from an earlier run, so a failed build can never
-/// leave an outdated package behind looking current.
-fn remove_stale(output: &str) -> anyhow::Result<()> {
-    match std::fs::remove_file(output) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("removing stale package {output}")),
-    }
 }
 
 /// Build a flat component package installing the app into `/Applications`,

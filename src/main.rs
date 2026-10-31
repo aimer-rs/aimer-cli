@@ -297,12 +297,12 @@ enum Commands {
         release: bool,
     },
 
-    /// Package the app: .dmg/.pkg (macOS), .ipa (iOS) or .aab/.apk (Android)
+    /// Package the app: .dmg/.pkg (macOS), .ipa (iOS), .aab/.apk (Android), .AppImage/.tar.gz (Linux)
     Package {
-        /// Target platform to package for (macos, ios or android)
+        /// Target platform to package for (macos, ios, android or linux)
         #[arg(value_enum)]
         platform: Targets,
-        /// Package format (dmg on macOS, ipa on iOS, aab on Android by default)
+        /// Package format (default: dmg on macOS, ipa on iOS, aab on Android, appimage on Linux)
         #[arg(short, long, value_enum)]
         format: Option<commands::package::PackageFormat>,
         /// Select an Aimer package in the Cargo workspace.
@@ -702,6 +702,17 @@ mod tests {
                 ..
             })
         ));
+        for (value, expected) in [
+            ("appimage", PackageFormat::Appimage),
+            ("tar.gz", PackageFormat::TarGz),
+            ("tar-gz", PackageFormat::TarGz),
+        ] {
+            let linux = Cli::try_parse_from(["aimer", "package", "linux", "-f", value]).unwrap();
+            assert!(
+                matches!(linux.command, Some(Commands::Package { format: Some(f), .. }) if f == expected),
+                "{value}"
+            );
+        }
         let ipa = Cli::try_parse_from(["aimer", "package", "ios", "-f", "ipa"]).unwrap();
         assert!(matches!(
             ipa.command,

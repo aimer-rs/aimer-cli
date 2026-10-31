@@ -139,7 +139,8 @@ aimer assemble android -p moewmoew
 ## `aimer package`
 
 Builds the app and wraps it in a distributable package: a `.dmg` disk image or a `.pkg` installer on macOS, an `.ipa` on
-iOS, and a signed `.aab` or `.apk` on Android. The Apple platforms need a macOS host; Android works on any host.
+iOS, a signed `.aab` or `.apk` on Android, and an `.AppImage` or `.tar.gz` on Linux. The Apple platforms need a macOS host,
+Linux needs a Linux host, and Android works on any host.
 
 ```bash
 aimer package [OPTIONS] <PLATFORM>
@@ -147,12 +148,12 @@ aimer package [OPTIONS] <PLATFORM>
 
 **Arguments:**
 
-- `<PLATFORM>`: Target platform to package: `macos`, `ios` or `android`.
+- `<PLATFORM>`: Target platform to package: `macos`, `ios`, `android` or `linux`.
 
 **Options:**
 
 - `-f, --format <FORMAT>`: Package format: `dmg` or `pkg` on macOS (default `dmg`), `ipa` on iOS (default), `aab` or
-  `apk` on Android (default `aab`).
+  `apk` on Android (default `aab`), `appimage` or `tar.gz` on Linux (default `appimage`).
 - `-r, --release`: Package a release build. This is the default, so the flag only states it explicitly.
 - `--debug`: Package a debug build instead (macOS and iOS; Android packages are always release builds). Cannot be
   combined with `--release`.
@@ -164,7 +165,7 @@ aimer package [OPTIONS] <PLATFORM>
 Unlike `build` and `assemble`, `package` builds in release mode unless `--debug` is given, since a package is meant for
 distribution.
 
-The package is written to `builds/<macos|ios|android>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
+The package is written to `builds/<macos|ios|android|linux>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
 name and `<version>` comes from `Aimer.toml` (omitted when empty).
 
 - **`dmg`**: a compressed disk image holding the `.app` next to an `Applications` shortcut. Opening it shows an install
@@ -193,6 +194,37 @@ aimer package macos --notarize
 # Debug build, e.g. to try the installer layout quickly
 aimer package macos --debug
 ```
+
+### Linux
+
+`aimer package linux` builds the app and packages the portable bundle (the folder `aimer assemble linux` makes: the
+executable, the registered assets, the icon and the desktop entry).
+
+```bash
+aimer package linux               # <name>-<version>-<arch>.AppImage
+aimer package linux -f tar.gz     # <name>-<version>-linux-<arch>.tar.gz
+```
+
+- **`appimage`** (default): one file that runs on most distributions without installing. The bundle is laid out as an
+  `AppDir` (the bundle under `usr/bin/`, plus the `AppRun` launcher, the desktop entry and the icon the format requires)
+  and turned into an AppImage by [`appimagetool`](https://github.com/AppImage/appimagetool/releases). `aimer` does not
+  download it: install it and put it on `PATH` as `appimagetool` (the release file `appimagetool-<arch>.AppImage` is also
+  found), or set `AIMER_APPIMAGETOOL` to its path. It is looked for before the build starts. It is run with
+  `APPIMAGE_EXTRACT_AND_RUN=1`, so it works without FUSE (containers, recent Ubuntu), and with `--no-appstream`, so
+  `appstreamcli` is not needed.
+- **`tar.gz`**: the bundle in a folder named `<package>-<version>`, compressed with `tar`. Unpack it anywhere and run the
+  executable.
+
+Things to know:
+
+- **Build on a Linux host.** Desktop targets are never cross-compiled. Build on the architecture you ship, since the file
+  name carries it (`x86_64`, `aarch64`).
+- **glibc.** The binary needs a glibc at least as new as the one it was built against, so build on an older distribution
+  (or in a container) than the ones you want to support.
+- **GPU drivers** (Vulkan or OpenGL) come from the user's system and are not bundled.
+- **Icon.** The AppImage needs `builds/linux/app.png`, which the project scaffold provides. A bundle without one fails
+  with a message that says so. A missing desktop entry is replaced by a minimal one.
+- **AppImages are not signed**, and `--sign` is rejected for Linux.
 
 ### Android and Google Play
 
