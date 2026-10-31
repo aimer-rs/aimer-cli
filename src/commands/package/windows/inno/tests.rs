@@ -155,14 +155,17 @@ fn a_missing_version_or_publisher_is_handled() {
 fn characters_with_a_meaning_to_the_compiler_are_escaped() {
     let script = script_of(|i| i.app_name = "My {App} \"Pro\"");
 
-    // In a directive only `{` needs doubling; in a quoted parameter `"` does too.
-    assert_eq!(line(&script, "AppName="), Some("My {{App}} \"Pro\""));
+    // Only an opening brace starts a constant, so only it is doubled; a closing
+    // one is literal. In a quoted parameter a double quote is doubled as well.
+    assert_eq!(line(&script, "AppName="), Some("My {{App} \"Pro\""));
+    // A shortcut is a file name, and `"` is not allowed in one, so it is dropped
+    // there; the brace is still doubled.
     assert!(
-        script.contains("Name: \"{autoprograms}\\My {{App}} \"\"Pro\"\"\""),
+        script.contains("Name: \"{autoprograms}\\My {{App} Pro\"; Filename: "),
         "{script}"
     );
     assert!(
-        script.contains("Description: \"Launch My {{App}} \"\"Pro\"\"\""),
+        script.contains("Description: \"Launch My {{App} \"\"Pro\"\"\""),
         "{script}"
     );
 }

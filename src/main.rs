@@ -685,7 +685,10 @@ mod tests {
             })
         ));
 
-        assert!(Cli::try_parse_from(["aimer", "package", "macos", "-f", "zip"]).is_err());
+        // Every format is a valid value; whether it suits the platform is
+        // decided later, so only a name that is not a format fails to parse.
+        assert!(Cli::try_parse_from(["aimer", "package", "macos", "-f", "rar"]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "package", "macos", "-f", "zip"]).is_ok());
 
         let ios = Cli::try_parse_from(["aimer", "package", "ios", "--upload"]).unwrap();
         assert!(matches!(

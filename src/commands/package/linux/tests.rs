@@ -29,7 +29,8 @@ fn appimagetool_is_taken_from_the_environment_when_set() {
 fn a_wrong_environment_path_is_an_error_not_a_silent_search() {
     let env = env_of(&[(ENV_APPIMAGETOOL, "/nope"), ("PATH", "/usr/bin")]);
 
-    let err = locate_appimagetool(&env, &|_| true)
+    // A tool does sit on PATH, but a mistyped variable must not fall back to it.
+    let err = locate_appimagetool(&env, &|p| p == Path::new("/usr/bin/appimagetool"))
         .unwrap_err()
         .to_string();
 
