@@ -19,6 +19,7 @@ mod mcp_ra;
 #[cfg(feature = "mcp")]
 mod mcp_ra_engine;
 pub mod migrate;
+pub mod package;
 mod project_selection;
 pub mod run;
 pub mod sessions;

@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+mod ios;
+mod macos;
+
+pub use ios::{IosMeta, IosSigningMeta};
+pub use macos::{MacosMeta, MacosSigningMeta};
+
 /// User-level configuration stored at `~/.aimer/config.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
 struct UserConfig {
@@ -353,6 +359,12 @@ pub struct AimerManifest {
     /// The `[fonts]` table: font name to project-relative file path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fonts: BTreeMap<String, String>,
+    /// The `[macos]` table: settings that only apply to the macOS target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<MacosMeta>,
+    /// The `[ios]` table: settings that only apply to the iOS target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ios: Option<IosMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -425,6 +437,8 @@ impl AimerManifest {
             build: None,
             assets: BTreeMap::new(),
             fonts: BTreeMap::new(),
+            macos: None,
+            ios: None,
         }
     }
 

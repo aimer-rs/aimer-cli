@@ -7,6 +7,7 @@
 - [`aimer run`](#aimer-run)
 - [`aimer build`](#aimer-build)
 - [`aimer assemble`](#aimer-assemble)
+- [`aimer package`](#aimer-package)
 - [`aimer doctor`](#aimer-doctor)
 - [`aimer clean`](#aimer-clean)
 - [`aimer migrate`](#aimer-migrate)
@@ -132,6 +133,143 @@ aimer assemble web --release
 # Select one Aimer package in a workspace
 aimer assemble android -p moewmoew
 ```
+
+---
+
+## `aimer package`
+
+Builds the app and wraps it in a distributable package: a `.dmg` disk image or a `.pkg` installer on macOS, an `.ipa` on
+iOS. Both need a macOS host.
+
+```bash
+aimer package [OPTIONS] <PLATFORM>
+```
+
+**Arguments:**
+
+- `<PLATFORM>`: Target platform to package: `macos` or `ios`.
+
+**Options:**
+
+- `-f, --format <FORMAT>`: Package format: `dmg` or `pkg` on macOS (default `dmg`), `ipa` on iOS (default).
+- `-r, --release`: Package a release build. This is the default, so the flag only states it explicitly.
+- `--debug`: Package a debug build instead. Cannot be combined with `--release`.
+- `-p, --package <NAME>`: Select an Aimer package in a Cargo workspace.
+- `--sign`: macOS: code-sign the app and the package (see [Signing and notarization](#signing-and-notarization)).
+- `--notarize`: macOS: sign, then have Apple notarize the package and staple the ticket. Implies `--sign`.
+- `--upload`: iOS: upload the build to App Store Connect (see [iOS and the App Store](#ios-and-the-app-store)).
+
+Unlike `build` and `assemble`, `package` builds in release mode unless `--debug` is given, since a package is meant for
+distribution.
+
+The package is written to `builds/<macos|ios>/dist/<release|debug>/<name>-<version>.<ext>`, where `<name>` is the application
+name and `<version>` comes from `Aimer.toml` (omitted when empty).
+
+- **`dmg`**: a compressed disk image holding the `.app` next to an `Applications` shortcut. Opening it shows an install
+  window ("To install, drag *App* to Applications") whose background gradient is tinted with the colors of the app's
+  icon. The image is made with `diskutil image` (macOS releases without it fall back to `hdiutil` and a plain image).
+  Finder records the window layout, so styling needs a logged-in macOS session and, the first time, permission for the
+  terminal to control Finder. When Finder is unavailable, or a volume with the app's name is already mounted, a warning
+  is printed and a plain image is created instead.
+- **`pkg`**: a flat installer that places the `.app` in `/Applications` (`pkgbuild`). The package identifier and version
+  are read from the app's `Info.plist`.
+
+Without `--sign`, packages are not code-signed or notarized, so other Macs show a Gatekeeper warning when opening them.
+
+**Examples:**
+
+```bash
+# Release .dmg (the default format and the default mode)
+aimer package macos
+
+# Release .pkg installer
+aimer package macos -f pkg
+
+# Signed, notarized and stapled .dmg
+aimer package macos --notarize
+
+# Debug build, e.g. to try the installer layout quickly
+aimer package macos --debug
+```
+
+### iOS and the App Store
+
+`aimer package ios` follows Apple's own route, the one Xcode's Organizer uses: it builds the Rust library for devices,
+**archives** the Xcode project, then **exports** the archive for a distribution method, which re-signs it and writes the
+`.ipa`. Assets are copied into the archived app and the version from `Aimer.toml` becomes `CFBundleShortVersionString`.
+iOS builds are always signed, so `--sign` is not needed.
+
+```bash
+# Archive and export an .ipa for App Store Connect
+aimer package ios
+
+# ... and upload it
+aimer package ios --upload
+```
+
+You need an Apple Developer team. Names go in `Aimer.toml`:
+
+```toml
+[ios.signing]
+team_id = "ABCDE12345"
+method = "app-store-connect"      # or release-testing, enterprise, debugging
+allow_provisioning_updates = true # see below
+```
+
+| Variable                                                       | Overrides                    |
+| -------------------------------------------------------------- | ---------------------------- |
+| `AIMER_IOS_TEAM_ID`                                            | `team_id`                    |
+| `AIMER_IOS_EXPORT_METHOD`                                      | `method`                     |
+| `AIMER_IOS_ALLOW_PROVISIONING_UPDATES`                         | `allow_provisioning_updates` |
+| `AIMER_ASC_KEY`, `AIMER_ASC_KEY_ID`, `AIMER_ASC_ISSUER`        | an App Store Connect API key |
+
+- **Signing is automatic.** Xcode picks the certificates and provisioning profiles. By default `xcodebuild` may not
+  change your developer account, so a first build can stop with "No profiles for '*bundle id*' were found". Set
+  `allow_provisioning_updates = true` to let it create the App ID and profiles (`-allowProvisioningUpdates`).
+- **Credentials.** When Xcode is signed in to the developer account (Xcode, Settings, Accounts) nothing else is needed.
+  On CI use an App Store Connect API key: the three `AIMER_ASC_*` variables, all or none. The key file is a `.p8` from
+  *Users and Access, Integrations* in App Store Connect.
+- **The bundle ID** is the `group` of `Aimer.toml`, and the app has to exist in App Store Connect before an upload.
+- **`--upload`** runs a second export whose destination is App Store Connect. It needs the `app-store-connect` method
+  and a release build. Xcode manages the build number on upload, so a repeated upload of the same version does not
+  clash. The `.ipa` stays in `builds/ios/dist/` either way.
+- **The other methods** (`release-testing`, `enterprise`, `debugging`) only write the `.ipa`.
+
+### Signing and notarization
+
+`--sign` and `--notarize` need an Apple Developer account and, once per machine:
+
+- a **Developer ID Application** certificate in the keychain (signs the app and the `.dmg`);
+- for `.pkg`, also a **Developer ID Installer** certificate;
+- for `--notarize`, notary credentials: a profile saved with `xcrun notarytool store-credentials <profile>`, or an App
+  Store Connect API key.
+
+Names and paths go in `Aimer.toml`; secrets never do:
+
+```toml
+[macos.signing]
+identity = "Developer ID Application: Your Name (TEAMID)"
+installer_identity = "Developer ID Installer: Your Name (TEAMID)" # .pkg only
+entitlements = "builds/macos/App.entitlements"                     # optional
+notary_profile = "aimer-notary"
+```
+
+Environment variables override the manifest, which suits CI:
+
+| Variable                                                          | Overrides            |
+| ----------------------------------------------------------------- | -------------------- |
+| `AIMER_MACOS_SIGN_IDENTITY`                                       | `identity`           |
+| `AIMER_MACOS_INSTALLER_IDENTITY`                                  | `installer_identity` |
+| `AIMER_MACOS_ENTITLEMENTS`                                        | `entitlements`       |
+| `AIMER_NOTARY_PROFILE`                                            | `notary_profile`     |
+| `AIMER_NOTARY_KEY`, `AIMER_NOTARY_KEY_ID`, `AIMER_NOTARY_ISSUER`  | an API key, used instead of a profile when all three are set |
+
+Before building, the command checks that the identities are in the keychain, that the entitlements file exists and that
+the notary credentials are accepted, so a mistake fails in seconds instead of after the build or the notarization wait.
+
+The steps, in order: sign the `.app` with the hardened runtime and verify it; build the `.dmg` (and sign it) or the
+`.pkg` (signed by `pkgbuild`); with `--notarize`, submit it with `xcrun notarytool submit --wait`, then
+`xcrun stapler staple`. Notarizing the package covers the app inside it; the app itself is not stapled separately.
 
 ---
 

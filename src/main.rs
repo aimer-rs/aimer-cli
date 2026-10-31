@@ -297,6 +297,34 @@ enum Commands {
         release: bool,
     },
 
+    /// Package the app: a .dmg or .pkg (macOS) or an .ipa (iOS)
+    Package {
+        /// Target platform to package for (macos or ios)
+        #[arg(value_enum)]
+        platform: Targets,
+        /// Package format (dmg on macOS, ipa on iOS by default)
+        #[arg(short, long, value_enum)]
+        format: Option<commands::package::PackageFormat>,
+        /// Select an Aimer package in the Cargo workspace.
+        #[arg(short, long)]
+        package: Option<String>,
+        /// Package a release build (the default; kept for explicitness)
+        #[arg(short, long, conflicts_with = "debug")]
+        release: bool,
+        /// Package a debug build instead of the default release build
+        #[arg(long)]
+        debug: bool,
+        /// macOS: code-sign the app and the package (see [macos.signing] in Aimer.toml)
+        #[arg(long)]
+        sign: bool,
+        /// macOS: sign, then have Apple notarize the package and staple the ticket
+        #[arg(long)]
+        notarize: bool,
+        /// iOS: upload the build to App Store Connect (see [ios.signing] in Aimer.toml)
+        #[arg(long)]
+        upload: bool,
+    },
+
     /// Check that the required toolchains are installed
     Doctor,
 
@@ -464,6 +492,28 @@ fn main() -> anyhow::Result<()> {
                 package.clone(),
             )?;
         }
+        Some(Commands::Package {
+            platform,
+            format,
+            package,
+            release: _,
+            debug,
+            sign,
+            notarize,
+            upload,
+        }) => {
+            commands::package::execute_with_package(commands::package::PackageOptions {
+                platform: platform.to_string(),
+                format: *format,
+                // Packaging is for distribution, so it builds release unless
+                // `--debug` asks otherwise; `--release` just states the default.
+                release: !*debug,
+                package: package.clone(),
+                sign: *sign,
+                notarize: *notarize,
+                upload: *upload,
+            })?;
+        }
         Some(Commands::Doctor) => {
             commands::doctor::execute()?;
         }
@@ -586,6 +636,90 @@ mod tests {
                 package: Some(package),
                 ..
             }) if package == "moewmoew"
+        ));
+    }
+
+    #[test]
+    fn package_defaults_to_no_explicit_format_and_accepts_short_flags() {
+        use crate::commands::package::PackageFormat;
+
+        let default = Cli::try_parse_from(["aimer", "package", "macos"]).unwrap();
+        assert!(matches!(
+            default.command,
+            Some(Commands::Package {
+                format: None,
+                release: false,
+                debug: false,
+                ..
+            })
+        ));
+
+        let debug = Cli::try_parse_from(["aimer", "package", "macos", "--debug"]).unwrap();
+        assert!(matches!(
+            debug.command,
+            Some(Commands::Package { debug: true, .. })
+        ));
+        assert!(Cli::try_parse_from(["aimer", "package", "macos", "--debug", "-r"]).is_err());
+
+        let pkg =
+            Cli::try_parse_from(["aimer", "package", "macos", "-f", "pkg", "-r", "-p", "app"])
+                .unwrap();
+        assert!(matches!(
+            pkg.command,
+            Some(Commands::Package {
+                format: Some(PackageFormat::Pkg),
+                release: true,
+                package: Some(package),
+                ..
+            }) if package == "app"
+        ));
+
+        let dmg = Cli::try_parse_from(["aimer", "package", "macos", "--format", "dmg"]).unwrap();
+        assert!(matches!(
+            dmg.command,
+            Some(Commands::Package {
+                format: Some(PackageFormat::Dmg),
+                ..
+            })
+        ));
+
+        assert!(Cli::try_parse_from(["aimer", "package", "macos", "-f", "zip"]).is_err());
+
+        let ios = Cli::try_parse_from(["aimer", "package", "ios", "--upload"]).unwrap();
+        assert!(matches!(
+            ios.command,
+            Some(Commands::Package {
+                format: None,
+                upload: true,
+                ..
+            })
+        ));
+        let ipa = Cli::try_parse_from(["aimer", "package", "ios", "-f", "ipa"]).unwrap();
+        assert!(matches!(
+            ipa.command,
+            Some(Commands::Package {
+                format: Some(PackageFormat::Ipa),
+                ..
+            })
+        ));
+
+        let signed =
+            Cli::try_parse_from(["aimer", "package", "macos", "--sign", "--notarize"]).unwrap();
+        assert!(matches!(
+            signed.command,
+            Some(Commands::Package {
+                sign: true,
+                notarize: true,
+                ..
+            })
+        ));
+        assert!(matches!(
+            default.command,
+            Some(Commands::Package {
+                sign: false,
+                notarize: false,
+                ..
+            })
         ));
     }
 

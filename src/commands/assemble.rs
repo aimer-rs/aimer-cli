@@ -379,7 +379,7 @@ fn clean_bundle(path: &str) -> anyhow::Result<()> {
 /// Like [`build_ios`] this goes through `cargo rustc`, so the compiler writes
 /// down the system frameworks the crate graph links against for
 /// [`package_macos`] to hand to Xcode. See [`link_flags`].
-fn build_macos(release: bool, reporter: &dyn Reporter) -> anyhow::Result<()> {
+pub(crate) fn build_macos(release: bool, reporter: &dyn Reporter) -> anyhow::Result<()> {
     let mut cargo = Command::new("cargo");
     cargo
         .arg("rustc")
@@ -526,7 +526,11 @@ impl IosPlan {
 /// the trailing `--print native-static-libs` makes the compiler write down
 /// which system frameworks the crate graph links against, which
 /// [`package_ios`] then feeds to Xcode. See [`link_flags`].
-fn build_ios(plan: &IosPlan, release: bool, reporter: &dyn Reporter) -> anyhow::Result<()> {
+pub(crate) fn build_ios(
+    plan: &IosPlan,
+    release: bool,
+    reporter: &dyn Reporter,
+) -> anyhow::Result<()> {
     let mut cargo = Command::new("cargo");
     cargo
         .arg("rustc")
@@ -557,21 +561,7 @@ pub(crate) fn package_ios(
     let artifact = plan.app_path(&app_name, release);
     clean_bundle(&artifact)?;
 
-    let lib_name = lib_name_of(pkg_name);
-    let src_lib = artifact_path(plan.rust_target, &lib_name, release, ".a");
-    copy_lib(
-        &src_lib,
-        "builds/ios/Libraries",
-        &format!("lib{lib_name}.a"),
-        reporter,
-    )?;
-
-    // The archive alone does not tell Xcode which frameworks to link, so the
-    // list the compiler just wrote is turned into the project's xcconfig.
-    link_flags::refresh(
-        Path::new(IOS_PROJECT_DIR),
-        &link_flags::raw_path(plan.rust_target, release),
-    )?;
+    stage_ios_inputs(pkg_name, plan, release, reporter)?;
 
     reporter.note("Building Xcode project for iOS...".to_string());
     reporter.run(
@@ -589,6 +579,32 @@ pub(crate) fn package_ios(
 
     reporter.stage_assets(&artifact)?;
     Ok(artifact)
+}
+
+/// Hand the freshly compiled Rust library, and the frameworks it needs, to the
+/// Xcode project. Every way of building the project (`xcodebuild build`, or
+/// `archive` for `aimer package ios`) starts here.
+pub(crate) fn stage_ios_inputs(
+    pkg_name: &str,
+    plan: &IosPlan,
+    release: bool,
+    reporter: &dyn Reporter,
+) -> anyhow::Result<()> {
+    let lib_name = lib_name_of(pkg_name);
+    let src_lib = artifact_path(plan.rust_target, &lib_name, release, ".a");
+    copy_lib(
+        &src_lib,
+        "builds/ios/Libraries",
+        &format!("lib{lib_name}.a"),
+        reporter,
+    )?;
+
+    // The archive alone does not tell Xcode which frameworks to link, so the
+    // list the compiler just wrote is turned into the project's xcconfig.
+    link_flags::refresh(
+        Path::new(IOS_PROJECT_DIR),
+        &link_flags::raw_path(plan.rust_target, release),
+    )
 }
 
 /// The Rust target and JNI directory matching an Android ABI.

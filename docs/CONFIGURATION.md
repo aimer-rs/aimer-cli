@@ -29,6 +29,15 @@ data = "assets/data.json"
 [fonts]
 inter = "assets/fonts/Inter-Regular.ttf"
 
+# Optional code signing for `aimer package --sign` (macOS), see docs/COMMANDS.md
+[macos.signing]
+identity = "Developer ID Application: Your Name (TEAMID)"
+notary_profile = "aimer-notary"
+
+# Optional signing and App Store distribution for `aimer package ios`, see docs/COMMANDS.md
+[ios.signing]
+team_id = "ABCDE12345"
+
 # Optional hot-reload guest configuration (unstable / nightly)
 [build.hot_reload]
 package = "my_aimer_app"
