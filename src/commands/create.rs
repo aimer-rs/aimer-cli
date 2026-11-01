@@ -295,7 +295,10 @@ mod tests {
         // Core files and directories are present.
         assert!(dir.join("src/main.rs").exists(), "missing src/main.rs");
         assert!(dir.join("Cargo.toml").exists(), "missing Cargo.toml");
-        assert!(!dir.join("build.rs").exists(), "create must not add a build.rs");
+        assert!(
+            !dir.join("build.rs").exists(),
+            "create must not add a build.rs"
+        );
         assert!(dir.join("Aimer.toml").exists(), "missing Aimer.toml");
         assert!(dir.join(".gitignore").exists(), "missing .gitignore");
         assert!(dir.join("README.md").exists(), "missing README.md");
@@ -362,10 +365,9 @@ mod tests {
         )
         .unwrap();
 
-        let strings = fs::read_to_string(
-            dir.join("builds/android/app/src/main/res/values/strings.xml"),
-        )
-        .unwrap();
+        let strings =
+            fs::read_to_string(dir.join("builds/android/app/src/main/res/values/strings.xml"))
+                .unwrap();
         assert!(strings.contains(">Fish &amp; Chips<"), "{strings}");
 
         let desktop = fs::read_to_string(dir.join("builds/linux/myapp.desktop")).unwrap();
@@ -382,7 +384,10 @@ mod tests {
         // name from the product at build time.
         assert!(dir.join("builds/macos/myapp.xcodeproj").is_dir());
         let plist = fs::read_to_string(dir.join("builds/macos/myapp/Info.plist")).unwrap();
-        assert!(plist.contains("<string>$(PRODUCT_NAME)</string>"), "{plist}");
+        assert!(
+            plist.contains("<string>$(PRODUCT_NAME)</string>"),
+            "{plist}"
+        );
     }
 
     #[test]

@@ -1,8 +1,10 @@
+pub mod aimer_ndk;
 pub mod assemble;
 pub mod assets;
 pub mod build;
 pub mod clean;
 pub mod completions;
+pub mod components;
 pub mod create;
 pub mod docs;
 pub mod doctor;

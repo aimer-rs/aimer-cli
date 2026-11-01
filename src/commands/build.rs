@@ -3,7 +3,8 @@ use std::process::Command;
 
 use anyhow::{Context, bail};
 
-use crate::commands::assemble::ensure_host_desktop;
+use crate::commands::assemble::{ANDROID_DEFAULT_ABI, ensure_host_desktop};
+use crate::commands::components::ensure_ndk;
 use crate::commands::run::web::{configure_trunk, find_llvm_ar};
 use crate::config::{AimerManifest, resolve_cargo_package_name};
 use crate::errors::AimerError;
@@ -88,16 +89,11 @@ fn build_command(target: Targets, release: bool) -> anyhow::Result<Command> {
             c
         }
         Targets::Android | Targets::AndroidSimulator => {
-            let mut c = Command::new("cargo");
-            c.arg("ndk")
-                .arg("-t")
-                .arg("arm64-v8a")
-                .arg("build")
-                .arg("--lib");
-            if release {
-                c.arg("--release");
-            }
-            c
+            // The NDK toolchain is found up front (offering to install it
+            // when missing) so a missing NDK is reported as such rather than
+            // as a linker failure.
+            ensure_ndk()?;
+            crate::commands::aimer_ndk::build_command(ANDROID_DEFAULT_ABI, release)
         }
         Targets::Macos => {
             let mut c = Command::new("cargo");

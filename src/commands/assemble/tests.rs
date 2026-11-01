@@ -505,13 +505,27 @@ fn build_ios_asks_cargo_for_the_requested_profile() {
 
 #[test]
 fn build_android_targets_the_abi_of_the_plan() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("source.properties"),
+        "Pkg.Revision = 28.0.12433566\n",
+    )
+    .unwrap();
+    let ndk = Ndk::at(home.path()).unwrap();
     let plan = AndroidPlan::for_abi("x86_64");
     let reporter = SpyReporter::new();
-    build_android(&plan, true, &reporter).unwrap();
+    build_android_with(&ndk, &plan, true, &reporter).unwrap();
     let steps = reporter.steps.lock().unwrap();
+    assert_eq!(steps[0].0.kind, StepKind::Cargo);
     assert_eq!(
         steps[0].1,
-        vec!["ndk", "-t", "x86_64", "build", "--lib", "--release"]
+        vec![
+            "build",
+            "--lib",
+            "--target",
+            "x86_64-linux-android",
+            "--release"
+        ]
     );
 }
 

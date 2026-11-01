@@ -345,3 +345,39 @@ fn a_failing_tool_stops_the_package_and_cleans_up() {
     assert!(err.to_string().contains("ISCC failed"), "{err}");
     assert!(!dist.join(WORK_DIR_NAME).exists());
 }
+
+#[test]
+fn iscc_installed_by_components_is_found_in_the_aimer_folder() {
+    let env = env_of(&[("USERPROFILE", "/home/me"), ("PATH", "/a")]);
+
+    let found = locate_iscc(&env, &|p| {
+        p == Path::new("/home/me/.aimer/innosetup/ISCC.exe")
+    });
+
+    assert_eq!(
+        found.unwrap(),
+        Path::new("/home/me/.aimer/innosetup/ISCC.exe")
+    );
+}
+
+#[test]
+fn wix_installed_by_components_is_found_in_the_aimer_bin() {
+    let env = env_of(&[("USERPROFILE", "/home/me")]);
+
+    let found = locate_wix(&env, &|p| p == Path::new("/home/me/.aimer/bin/wix.exe"));
+
+    assert_eq!(found.unwrap(), Path::new("/home/me/.aimer/bin/wix.exe"));
+}
+
+#[test]
+fn missing_windows_tools_suggest_the_components_command() {
+    let iscc = locate_iscc(&env_of(&[]), &|_| false)
+        .unwrap_err()
+        .to_string();
+    let wix = locate_wix(&env_of(&[]), &|_| false)
+        .unwrap_err()
+        .to_string();
+
+    assert!(iscc.contains("aimer components add inno-setup"), "{iscc}");
+    assert!(wix.contains("aimer components add wix"), "{wix}");
+}

@@ -54,9 +54,7 @@ use super::mcp_ra::{
 };
 use super::sessions::resolve_project_path;
 use crate::resource_monitor::ResourceRecordStore;
-use crate::session::{
-    ControlClient, SessionRegistry, SessionSnapshot, SessionStatus,
-};
+use crate::session::{ControlClient, SessionRegistry, SessionSnapshot, SessionStatus};
 
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 struct LogsArguments {

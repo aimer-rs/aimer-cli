@@ -50,8 +50,8 @@ impl TitleReporter {
     /// Create a reporter, saving the current title. Does nothing unless stdout
     /// is a terminal, so the escapes never leak into pipes or CI logs.
     pub fn new(app_name: &str) -> Self {
-        let enabled = stdout().is_terminal()
-            && std::env::var("TERM").map_or(true, |term| term != "dumb");
+        let enabled =
+            stdout().is_terminal() && std::env::var("TERM").map_or(true, |term| term != "dumb");
         if enabled {
             write_escape(PUSH_TITLE);
         }
@@ -120,7 +120,10 @@ mod tests {
 
     #[test]
     fn title_sequence_is_a_terminated_osc_2() {
-        assert_eq!(set_title_sequence("Compiling 1%"), "\x1b]2;Compiling 1%\x1b\\");
+        assert_eq!(
+            set_title_sequence("Compiling 1%"),
+            "\x1b]2;Compiling 1%\x1b\\"
+        );
     }
 
     #[test]

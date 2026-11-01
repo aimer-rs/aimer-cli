@@ -64,10 +64,12 @@ impl Reporter for ConsoleReporter<'_> {
     }
 
     fn run(&self, mut cmd: Command, step: Step) -> anyhow::Result<()> {
-        let mut child = match cmd.stdin(Stdio::null())
+        let mut child = match cmd
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn() {
+            .spawn()
+        {
             Ok(child) => child,
             Err(e) => bail!("failed to start {}: {e}", step.action),
         };
@@ -128,10 +130,12 @@ pub fn spawn_streamed(
     stream_out: impl FnOnce(ChildStdout, Sender<RunnerEvent>),
     stream_err: impl FnOnce(ChildStderr, Sender<RunnerEvent>),
 ) -> bool {
-    let mut child = match cmd.stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn() {
+    let mut child = match cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
         Ok(child) => child,
         Err(e) => {
             build_log(tx, format!("{spawn_fail_msg}: {e}"));

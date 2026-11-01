@@ -74,8 +74,7 @@ fn render_config_at(
             servers.insert("aimer".to_string(), TomlValue::Table(server));
             let mut root = TomlTable::new();
             root.insert("mcp_servers".to_string(), TomlValue::Table(servers));
-            toml::to_string_pretty(&TomlValue::Table(root))
-                .context("serializing MCP configuration")
+            toml::to_string_pretty(&TomlValue::Table(root)).context("serializing MCP configuration")
         }
     }
 }

@@ -161,7 +161,7 @@ fn build_target(plan: &AndroidPlan) -> CargoBuildTarget {
     }
 }
 
-/// The Android leg of the unified pipeline: `cargo ndk build` → the shared
+/// The Android leg of the unified pipeline: the `aimer_ndk` build → the shared
 /// [`package_android`](assemble::package_android) step → `adb install` and
 /// `am start`, then tail `logcat`.
 pub struct AndroidRunner {

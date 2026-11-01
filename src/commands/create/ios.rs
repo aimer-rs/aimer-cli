@@ -35,8 +35,7 @@ pub fn create(dir: &Path, name: &str, _app_name: &str, group: &str) {
 
     fs::write(
         app_dir.join("Info.plist"),
-        include_str!("../../../templates/ios/Info.plist.template")
-            .replace("${group}", group),
+        include_str!("../../../templates/ios/Info.plist.template").replace("${group}", group),
     )
     .unwrap();
 
@@ -113,24 +112,34 @@ mod tests {
     fn the_scaffold_supports_continuous_ipad_resizing() {
         let dir = scaffolded("resizable_app");
         let info = fs::read_to_string(dir.join("builds/ios/resizable_app/Info.plist")).unwrap();
-        let project = fs::read_to_string(
-            dir.join("builds/ios/resizable_app.xcodeproj/project.pbxproj"),
-        ).unwrap();
+        let project =
+            fs::read_to_string(dir.join("builds/ios/resizable_app.xcodeproj/project.pbxproj"))
+                .unwrap();
 
-        assert!(!info.contains("<key>UIRequiresFullScreen</key>"),
-            "full-screen compatibility delays scene resizing until the drag ends");
+        assert!(
+            !info.contains("<key>UIRequiresFullScreen</key>"),
+            "full-screen compatibility delays scene resizing until the drag ends"
+        );
         assert!(!project.contains("INFOPLIST_KEY_UIRequiresFullScreen"));
         assert!(info.contains("<key>UIApplicationSceneManifest</key>"));
         assert!(info.contains("<key>UILaunchScreen</key>"));
-        let ipad = info.split_once("<key>UISupportedInterfaceOrientations~ipad</key>")
-            .expect("iPad must support every orientation").1
-            .split_once("</array>").expect("iPad orientation array").0;
+        let ipad = info
+            .split_once("<key>UISupportedInterfaceOrientations~ipad</key>")
+            .expect("iPad must support every orientation")
+            .1
+            .split_once("</array>")
+            .expect("iPad orientation array")
+            .0;
         for orientation in [
-            "UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown",
-            "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight",
+            "UIInterfaceOrientationPortrait",
+            "UIInterfaceOrientationPortraitUpsideDown",
+            "UIInterfaceOrientationLandscapeLeft",
+            "UIInterfaceOrientationLandscapeRight",
         ] {
-            assert!(ipad.contains(&format!("<string>{orientation}</string>")),
-                "missing iPad orientation: {orientation}");
+            assert!(
+                ipad.contains(&format!("<string>{orientation}</string>")),
+                "missing iPad orientation: {orientation}"
+            );
         }
     }
 
@@ -180,7 +189,10 @@ mod tests {
             );
             checked += 1;
         }
-        assert!(checked >= 5, "expected the keyboard and frame shims, found {checked}");
+        assert!(
+            checked >= 5,
+            "expected the keyboard and frame shims, found {checked}"
+        );
     }
 
     /// A scratch project directory with the iOS scaffold in it.

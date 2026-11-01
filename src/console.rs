@@ -146,7 +146,10 @@ fn progress_sequence(status: &Status) -> String {
         // Indeterminate spinner while resolving deps / launching (no concrete %).
         Status::Locking | Status::Launching => "\x1b]9;4;3;\x1b\\".to_string(),
         // Determinate progress for the build phases.
-        Status::Fetching(p) | Status::Downloading(p) | Status::Compiling(p) | Status::Building(p) => {
+        Status::Fetching(p)
+        | Status::Downloading(p)
+        | Status::Compiling(p)
+        | Status::Building(p) => {
             format!("\x1b]9;4;1;{}\x1b\\", p)
         }
         // Error state paints the bar red.

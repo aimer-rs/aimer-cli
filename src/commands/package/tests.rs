@@ -300,13 +300,41 @@ fn package_names_never_collide_across_platforms() {
         windows::output_name(PackageFormat::Msi, "App", "1.0.0", "x64"),
         windows::output_name(PackageFormat::Zip, "App", "1.0.0", "x64"),
         // macOS, iOS and Android packages are `<app>-<version>.<ext>`.
-        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Dmg.extension()),
-        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Pkg.extension()),
-        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Zip.extension()),
-        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::TarGz.extension()),
-        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Ipa.extension()),
-        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Aab.extension()),
-        format!("{}.{}", package_stem("App", "1.0.0"), PackageFormat::Apk.extension()),
+        format!(
+            "{}.{}",
+            package_stem("App", "1.0.0"),
+            PackageFormat::Dmg.extension()
+        ),
+        format!(
+            "{}.{}",
+            package_stem("App", "1.0.0"),
+            PackageFormat::Pkg.extension()
+        ),
+        format!(
+            "{}.{}",
+            package_stem("App", "1.0.0"),
+            PackageFormat::Zip.extension()
+        ),
+        format!(
+            "{}.{}",
+            package_stem("App", "1.0.0"),
+            PackageFormat::TarGz.extension()
+        ),
+        format!(
+            "{}.{}",
+            package_stem("App", "1.0.0"),
+            PackageFormat::Ipa.extension()
+        ),
+        format!(
+            "{}.{}",
+            package_stem("App", "1.0.0"),
+            PackageFormat::Aab.extension()
+        ),
+        format!(
+            "{}.{}",
+            package_stem("App", "1.0.0"),
+            PackageFormat::Apk.extension()
+        ),
     ];
 
     let unique: std::collections::HashSet<_> = names.iter().collect();

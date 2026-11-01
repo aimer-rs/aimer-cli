@@ -111,15 +111,21 @@ pub(super) fn locate_appimagetool(
     // The release page ships it as `appimagetool-<arch>.AppImage`.
     let download = format!("appimagetool-{}.AppImage", appimage_arch());
     let how_to_get = format!(
-        "download it from {APPIMAGETOOL_URL}, make it executable and put it on PATH as \
-         `appimagetool`"
+        "run `aimer components add appimagetool`, or download it from {APPIMAGETOOL_URL}, make \
+         it executable and put it on PATH as `appimagetool`"
     );
+    // Where `aimer components add appimagetool` puts it.
+    let extra_dirs = ["HOME", "USERPROFILE"]
+        .into_iter()
+        .filter_map(|var| env(var))
+        .map(|home| Path::new(&home).join(".aimer/bin"))
+        .collect();
     tools::locate(
         &ToolSpec {
             name: "appimagetool",
             env_var: ENV_APPIMAGETOOL,
             file_names: &["appimagetool", &download],
-            extra_dirs: Vec::new(),
+            extra_dirs,
             how_to_get: &how_to_get,
         },
         env,

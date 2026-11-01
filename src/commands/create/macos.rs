@@ -33,8 +33,7 @@ pub fn create(dir: &Path, name: &str, _app_name: &str, group: &str) {
 
     fs::write(
         app_dir.join("Info.plist"),
-        include_str!("../../../templates/macos/info.plist.template")
-            .replace("${group}", group),
+        include_str!("../../../templates/macos/info.plist.template").replace("${group}", group),
     )
     .unwrap();
 

@@ -9,6 +9,7 @@
 - [`aimer assemble`](#aimer-assemble)
 - [`aimer package`](#aimer-package)
 - [`aimer doctor`](#aimer-doctor)
+- [`aimer components`](#aimer-components)
 - [`aimer clean`](#aimer-clean)
 - [`aimer migrate`](#aimer-migrate)
 - [`aimer completions`](#aimer-completions)
@@ -230,9 +231,12 @@ aimer package windows -f zip       # <name>-<version>-windows-<arch>.zip
 
 Things to know:
 
-- **The tools are not downloaded.** `ISCC.exe` is looked for in `AIMER_ISCC`, on `PATH`, then in the folder Inno Setup
-  installs to (`Program Files (x86)\Inno Setup 6`, or `%LOCALAPPDATA%\Programs\Inno Setup 6`). `wix` is looked for in
-  `AIMER_WIX`, on `PATH`, then in `%USERPROFILE%\.dotnet\tools`. A missing tool is reported before the build starts.
+- **The tools are not downloaded by `aimer package`.** Install them with
+  [`aimer components add inno-setup wix`](#aimer-components) (into `~/.aimer`), or yourself. `ISCC.exe` is looked for in
+  `AIMER_ISCC`, on `PATH`, then in `~\.aimer\innosetup` and the folders Inno Setup installs to
+  (`Program Files (x86)\Inno Setup 6`, or `%LOCALAPPDATA%\Programs\Inno Setup 6`). `wix` is looked for in `AIMER_WIX`, on
+  `PATH`, then in `~\.aimer\bin` and `%USERPROFILE%\.dotnet\tools`. A missing tool is reported, with the
+  `aimer components add` command that installs it, before the build starts.
 - **Upgrades.** Both installers carry an id derived from the app's `group` (or package name), the same on every build, so a
   newer installer replaces an installed copy instead of installing beside it. Keep `group` stable.
 - **Not signed yet.** `--sign` is rejected for Windows, and an unsigned installer from an unknown publisher makes Windows
@@ -254,9 +258,10 @@ aimer package linux -f zip        # <name>-<version>-linux-<arch>.zip
 
 - **`appimage`** (default): one file that runs on most distributions without installing. The bundle is laid out as an
   `AppDir` (the bundle under `usr/bin/`, plus the `AppRun` launcher, the desktop entry and the icon the format requires)
-  and turned into an AppImage by [`appimagetool`](https://github.com/AppImage/appimagetool/releases). `aimer` does not
-  download it: install it and put it on `PATH` as `appimagetool` (the release file `appimagetool-<arch>.AppImage` is also
-  found), or set `AIMER_APPIMAGETOOL` to its path. It is looked for before the build starts. It is run with
+  and turned into an AppImage by [`appimagetool`](https://github.com/AppImage/appimagetool/releases). `aimer package`
+  does not download it: run `aimer components add appimagetool` (into `~/.aimer/bin`), or install it yourself and put it
+  on `PATH` as `appimagetool` (the release file `appimagetool-<arch>.AppImage` is also found), or set
+  `AIMER_APPIMAGETOOL` to its path. It is looked for before the build starts. It is run with
   `APPIMAGE_EXTRACT_AND_RUN=1`, so it works without FUSE (containers, recent Ubuntu), and with `--no-appstream`, so
   `appstreamcli` is not needed.
 - **`tar.gz`**: the bundle in a folder named `<package>-<version>`, compressed with `tar`. Unpack it anywhere and run the
@@ -424,6 +429,75 @@ aimer doctor
 - Android SDK & Bridge (`adb`, `gradle`)
 - Host linkers (`cc`, `pkg-config`, MSVC `link`)
 - Required `rustup` target triples for all supported platforms, providing copy-paste commands for missing targets
+
+---
+
+## `aimer components`
+
+Manages the tools Aimer installs for itself. They live in Aimer's own directory, `~/.aimer`, separate from
+`~/.cargo/bin` and from your Android SDK.
+
+```bash
+aimer components                      # list components and whether they are installed
+aimer components list                 # same as above
+aimer components add trunk wasm-pack  # install one or more components
+aimer components add ndk              # download and install the latest Android NDK
+aimer components add ndk@27           # a specific NDK (27, r27, 27.3 or a full version)
+aimer components add ndk --accept-licenses  # accept the Android SDK licence without asking (CI)
+aimer components remove trunk         # uninstall one or more components
+aimer components remove ndk           # remove every Aimer-managed NDK (ndk@27 removes just r27)
+```
+
+With [shell completions](INSTALLATION.md#enable-shell-completions) enabled, <kbd>Tab</kbd> after
+`aimer components add` suggests the available components, and after `aimer components remove` it
+suggests the installed ones.
+
+**Available components:**
+
+| Component      | Installs                                  | Used for                                   |
+|----------------|-------------------------------------------|--------------------------------------------|
+| `ndk`          | Android NDK (stable r23+), to `~/.aimer/ndk/<version>` | Building Android targets      |
+| `trunk`        | `trunk`                                   | Web (wasm) dev server and bundler          |
+| `wasm-bindgen` | `wasm-bindgen-cli`                        | Web (wasm) JavaScript bindings             |
+| `wasm-pack`    | `wasm-pack`                               | Web (wasm) package builder                 |
+| `appimagetool` | `appimagetool`, to `~/.aimer/bin` (Linux only) | `aimer package linux` (`.AppImage`)   |
+| `inno-setup`   | Inno Setup, to `~/.aimer/innosetup` (Windows only) | `aimer package windows` (`setup.exe`) |
+| `wix`          | WiX Toolset (`dotnet tool`), to `~/.aimer/bin` (Windows only) | `aimer package windows -f msi` |
+
+**How the cargo tools work:**
+
+- `add` runs `cargo install --locked --root ~/.aimer <package>`, so the executable lands in `~/.aimer/bin`.
+- `remove` runs `cargo uninstall --root ~/.aimer <package>`; a binary placed there by hand is simply deleted.
+- When `~/.aimer/bin` exists, Aimer appends it to the end of `PATH` for its own commands, so a component is used
+  whenever the same tool is not already on your `PATH`.
+
+**How the package installer generators work:**
+
+- `add appimagetool` downloads the `appimagetool-<arch>.AppImage` release from GitHub into `~/.aimer/bin/appimagetool`
+  and makes it executable. `remove` deletes it.
+- `add inno-setup` downloads Inno Setup's installer from jrsoftware.org and runs it silently for the current user into
+  `~/.aimer/innosetup`. `remove` runs Inno's uninstaller and deletes the folder.
+- `add wix` runs `dotnet tool install --tool-path ~/.aimer/bin wix`, so it needs the .NET SDK. `remove` runs
+  `dotnet tool uninstall --tool-path ~/.aimer/bin wix`.
+- Each one installs only on the operating system it is for; `aimer package` finds them there with no further setup.
+
+**How the NDK works:**
+
+- `add ndk` reads Google's Android repository manifest, picks the newest stable NDK for your OS (or the one you named),
+  downloads the zip, verifies its SHA-1 checksum, unpacks it with `unzip` (`tar` on Windows) and moves it into
+  `~/.aimer/ndk/<version>`. Nothing is left behind if the download fails.
+- The NDK needs you to accept the Android SDK licence. Aimer prints it and waits: **press Enter to accept**, or type
+  `n` to decline. An accepted licence is remembered in `~/.aimer/licenses`, so you are asked only once. Without a
+  terminal (CI), pass `--accept-licenses`.
+- Aimer finds the NDK from `ANDROID_NDK_HOME` and friends first, then your Android SDK, and finally `~/.aimer/ndk`,
+  so an NDK you installed yourself always wins.
+- When `aimer build` or `aimer assemble` targets Android and no NDK is found, Aimer offers to install one right
+  there (press Enter to accept).
+
+**General rules:**
+
+- Removing a component that is not installed is a no-op; an unknown component name is an error.
+- Only `ndk` accepts a `@version`.
 
 ---
 

@@ -62,7 +62,7 @@ See [Installation](docs/INSTALLATION.md) for feature flags and shell completions
 |:------------|:--------------------------------|:-------------------------------|:----------------------------------------------------------|
 | **macOS**   | `macos`                         | `.app` bundle                  | macOS, Xcode & Command Line Tools                         |
 | **iOS**     | `ios` / `ios-simulator`         | iOS App Bundle / Simulator App | macOS, Xcode, `xcrun`                                     |
-| **Android** | `android` / `android-simulator` | Android `.apk`                 | Android SDK, `adb`, `cargo-ndk`, Gradle                   |
+| **Android** | `android` / `android-simulator` | Android `.apk`                 | Android SDK, NDK r23+ (`aimer components add ndk`), `adb`, Gradle |
 | **Linux**   | `linux`                         | Portable binary bundle         | GCC/Clang, `pkg-config`                                   |
 | **Windows** | `windows`                       | Portable executable bundle     | MSVC C++ Build Tools (`link.exe`)                         |
 | **Web**     | `web`                           | WebAssembly + HTML/JS          | [`trunk`](https://trunkrs.dev/), `wasm32-unknown-unknown` |

@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, bail};
 
+use crate::commands::aimer_ndk::{Ndk, NdkTarget};
 use crate::commands::run::helpers::host_arch;
 use crate::commands::run::utilities::get_project_root;
 use crate::config::{resolve_cargo_package_name, resolve_package_name};
@@ -97,7 +98,7 @@ pub fn execute_with_package(
 /// progress parsing for its output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StepKind {
-    /// `cargo` or `cargo ndk`.
+    /// `cargo`, with the NDK environment of `aimer_ndk` on Android.
     Cargo,
     /// `xcodebuild`.
     Xcode,
@@ -652,25 +653,32 @@ pub(crate) fn apk_path(release: bool) -> String {
         })
 }
 
-/// Compile the Rust library for Android through `cargo ndk`.
+/// Compile the Rust library for Android through `aimer_ndk`.
 pub(crate) fn build_android(
     plan: &AndroidPlan,
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<()> {
-    let mut cargo = Command::new("cargo");
-    cargo
-        .arg("ndk")
-        .arg("-t")
-        .arg(plan.jni_dir)
-        .arg("build")
-        .arg("--lib");
-    if release {
-        cargo.arg("--release");
-    }
+    build_android_with(
+        &crate::commands::components::ensure_ndk()?,
+        plan,
+        release,
+        reporter,
+    )
+}
+
+/// [`build_android`] with the NDK to compile against chosen by the caller.
+fn build_android_with(
+    ndk: &Ndk,
+    plan: &AndroidPlan,
+    release: bool,
+    reporter: &dyn Reporter,
+) -> anyhow::Result<()> {
+    let target = NdkTarget::parse(plan.jni_dir)
+        .with_context(|| format!("unsupported Android ABI '{}'", plan.jni_dir))?;
     reporter.run(
-        cargo,
-        Step::new(StepKind::Cargo, "cargo ndk build for Android"),
+        ndk.cargo_command(target, release),
+        Step::new(StepKind::Cargo, "aimer_ndk build for Android"),
     )
 }
 

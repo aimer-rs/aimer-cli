@@ -125,6 +125,9 @@ pub(super) fn locate_iscc(
         under("ProgramFiles(x86)", "Inno Setup 6"),
         under("ProgramFiles", "Inno Setup 6"),
         under("LOCALAPPDATA", "Programs/Inno Setup 6"),
+        // Where `aimer components add inno-setup` installs it.
+        under("USERPROFILE", ".aimer/innosetup"),
+        under("HOME", ".aimer/innosetup"),
     ]
     .into_iter()
     .flatten()
@@ -135,8 +138,8 @@ pub(super) fn locate_iscc(
             env_var: ENV_ISCC,
             file_names: &["ISCC.exe", "iscc.exe", "ISCC", "iscc"],
             extra_dirs,
-            how_to_get: "install Inno Setup 6.3 or later from https://jrsoftware.org/isdl.php \
-                         and put its folder on PATH",
+            how_to_get: "run `aimer components add inno-setup`, or install Inno Setup 6.3 or \
+                         later from https://jrsoftware.org/isdl.php and put its folder on PATH",
         },
         env,
         is_file,
@@ -153,10 +156,15 @@ pub(super) fn locate_wix(
     env: &dyn Fn(&str) -> Option<String>,
     is_file: &dyn Fn(&Path) -> bool,
 ) -> anyhow::Result<PathBuf> {
+    // `aimer components add wix` installs into `~/.aimer/bin`, which
+    // `aimer` also puts on PATH; `dotnet tool install --global` uses the other.
     let extra_dirs = ["USERPROFILE", "HOME"]
         .into_iter()
         .filter_map(|var| env(var))
-        .map(|home| Path::new(&home).join(".dotnet/tools"))
+        .flat_map(|home| {
+            let home = PathBuf::from(home);
+            [home.join(".aimer/bin"), home.join(".dotnet/tools")]
+        })
         .collect();
     tools::locate(
         &ToolSpec {
@@ -164,9 +172,9 @@ pub(super) fn locate_wix(
             env_var: ENV_WIX,
             file_names: &["wix.exe", "wix"],
             extra_dirs,
-            how_to_get: "install the WiX Toolset v4 or later with \
-                         `dotnet tool install --global wix` (WiX 3's candle and light are not \
-                         supported)",
+            how_to_get: "run `aimer components add wix`, or install the WiX Toolset v4 or \
+                         later with `dotnet tool install --global wix` (WiX 3's candle and \
+                         light are not supported)",
         },
         env,
         is_file,

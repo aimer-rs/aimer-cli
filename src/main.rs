@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::engine::ArgValueCompleter;
 
 use crate::commands::version::VersionCommand;
 use crate::targets::{MigrateTarget, Targets};
@@ -270,6 +271,45 @@ enum Commands {
         #[arg(value_enum)]
         target: MigrateTarget,
     },
+
+    /// Manage the tools Aimer installs into ~/.aimer/bin (lists them by default)
+    Components {
+        #[command(subcommand)]
+        action: Option<ComponentsAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ComponentsAction {
+    /// List the available components and whether they are installed
+    List,
+
+    /// Install one or more components into ~/.aimer
+    Add {
+        /// Components to install, for example `trunk` or `ndk` (`ndk@27` picks a version)
+        #[arg(
+            required = true,
+            num_args = 1..,
+            add = ArgValueCompleter::new(commands::components::complete_available)
+        )]
+        names: Vec<String>,
+
+        /// Accept the licences a component requires (such as the Android SDK
+        /// licence for the NDK) without asking
+        #[arg(long)]
+        accept_licenses: bool,
+    },
+
+    /// Remove one or more installed components
+    Remove {
+        /// Components to remove, for example `trunk`
+        #[arg(
+            required = true,
+            num_args = 1..,
+            add = ArgValueCompleter::new(commands::components::complete_installed)
+        )]
+        names: Vec<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -284,6 +324,8 @@ fn main() -> anyhow::Result<()> {
 
     #[cfg(debug_assertions)]
     apply_project_dir_override(var_os("MY_PROJECT_DIR").as_deref())?;
+
+    commands::components::expose_on_path();
 
     if cli.version {
         VersionCommand::execute();
@@ -360,7 +402,10 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     commands::mcp_install::ConfigFormat::Toml
                 };
-                println!("{}", commands::mcp_install::render_config(format, scope()?)?);
+                println!(
+                    "{}",
+                    commands::mcp_install::render_config(format, scope()?)?
+                );
             } else if let Some(agents) = install {
                 let scope = scope()?;
                 let reports = commands::mcp_install::install(agents, scope)?;
@@ -455,6 +500,20 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Clean) => {
             commands::clean::execute()?;
         }
+        Some(Commands::Components { action }) => {
+            use commands::components::Action;
+            commands::components::execute(match action {
+                None | Some(ComponentsAction::List) => Action::List,
+                Some(ComponentsAction::Add {
+                    names,
+                    accept_licenses,
+                }) => Action::Add {
+                    names: names.clone(),
+                    accept_licenses: *accept_licenses,
+                },
+                Some(ComponentsAction::Remove { names }) => Action::Remove(names.clone()),
+            })?;
+        }
         Some(Commands::Completions { shell, install }) => {
             commands::completions::execute(*shell, *install)?;
         }
@@ -475,7 +534,7 @@ mod tests {
     #[cfg(debug_assertions)]
     use std::env::{current_dir, set_current_dir};
 
-    use super::{Cli, Commands};
+    use super::{Cli, Commands, ComponentsAction};
 
     #[cfg(debug_assertions)]
     #[test]
@@ -796,6 +855,59 @@ mod tests {
         let cli = Cli::try_parse_from(["aimer", "run", "--tui"]).unwrap();
 
         assert!(matches!(cli.command, Some(Commands::Run { tui: true, .. })));
+    }
+
+    #[test]
+    fn components_defaults_to_listing() {
+        let cli = Cli::try_parse_from(["aimer", "components"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Components { action: None })
+        ));
+    }
+
+    #[test]
+    fn components_add_and_remove_take_names() {
+        let cli =
+            Cli::try_parse_from(["aimer", "components", "add", "trunk", "wasm-pack"]).unwrap();
+        let Some(Commands::Components {
+            action:
+                Some(ComponentsAction::Add {
+                    names,
+                    accept_licenses,
+                }),
+        }) = cli.command
+        else {
+            panic!("expected components add");
+        };
+        assert_eq!(names, ["trunk", "wasm-pack"]);
+        assert!(!accept_licenses);
+
+        let cli = Cli::try_parse_from(["aimer", "components", "add", "ndk", "--accept-licenses"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Components {
+                action: Some(ComponentsAction::Add {
+                    accept_licenses: true,
+                    ..
+                })
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["aimer", "components", "remove", "trunk"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Components {
+                action: Some(ComponentsAction::Remove { .. })
+            })
+        ));
+    }
+
+    #[test]
+    fn components_add_requires_a_name() {
+        assert!(Cli::try_parse_from(["aimer", "components", "add"]).is_err());
     }
 
     #[test]

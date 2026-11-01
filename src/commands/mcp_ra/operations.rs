@@ -1,10 +1,7 @@
 use super::*;
 
 impl RustAnalyzerBridge {
-    pub fn new(
-        project_root: PathBuf,
-        config: aimer_config::RustAnalyzerConfig,
-    ) -> Self {
+    pub fn new(project_root: PathBuf, config: aimer_config::RustAnalyzerConfig) -> Self {
         Self {
             project_root: Arc::new(std::sync::RwLock::new(project_root)),
             config,

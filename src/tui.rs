@@ -81,11 +81,7 @@ impl RawModeGuard {
     pub fn with_alternate_screen() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let supports_enhancement = supports_keyboard_enhancement().unwrap_or(false);
-        execute!(
-            stdout(),
-            EnterAlternateScreen,
-            EnableButtonMouseCapture
-        )?;
+        execute!(stdout(), EnterAlternateScreen, EnableButtonMouseCapture)?;
         // The legacy Windows console API rejects keyboard enhancement flags,
         // so only push them when the terminal reports support.
         let supports_enhancement = supports_enhancement

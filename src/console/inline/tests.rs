@@ -344,7 +344,12 @@ fn live_rows_never_wrap_in_a_narrow_window() {
 
     renderer.render(&session, 20).unwrap();
 
-    assert!(renderer.live_lines.iter().all(|line| physical_rows(line, 20) == 1));
+    assert!(
+        renderer
+            .live_lines
+            .iter()
+            .all(|line| physical_rows(line, 20) == 1)
+    );
 }
 
 #[test]
@@ -473,7 +478,10 @@ fn a_running_stage_shows_its_percentage_instead_of_its_duration() {
     let frame = live_frame(&session);
     assert!(frame.contains("Downloading"));
     assert!(frame.contains("40%"));
-    assert!(!frame.contains("ms"), "no duration while progress is known: {frame}");
+    assert!(
+        !frame.contains("ms"),
+        "no duration while progress is known: {frame}"
+    );
 }
 
 #[test]

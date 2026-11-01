@@ -164,7 +164,10 @@ impl InlineSession {
     fn push_build_detail(&mut self, message: String) {
         if message.trim_start().starts_with(BUILD_LOCK_WAIT_PREFIX) {
             // Cargo repeats the notice; the wait began at the first one.
-            let since = self.build_lock_wait.as_ref().map_or_else(Instant::now, |(_, since)| *since);
+            let since = self
+                .build_lock_wait
+                .as_ref()
+                .map_or_else(Instant::now, |(_, since)| *since);
             self.build_lock_wait = Some((message.clone(), since));
         }
         self.state.push_build_log(message.clone());
@@ -784,14 +787,11 @@ pub fn start(
         if quit {
             break;
         }
-        let backlog = super::event_drain::drain_events(
-            &rx,
-            super::event_drain::EVENT_BUDGET,
-            |event| {
+        let backlog =
+            super::event_drain::drain_events(&rx, super::event_drain::EVENT_BUDGET, |event| {
                 super::observe_session_event(control_session.as_ref(), &event);
                 session.apply_event(event);
-            },
-        );
+            });
         title_reporter.update(&session.state.status);
 
         let width = terminal::size()

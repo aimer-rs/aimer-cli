@@ -39,18 +39,14 @@ impl CargoBuildTarget {
     /// Whether the build is driven by cargo itself, and can therefore be asked
     /// for the JSON messages [`stream_cargo_json`] understands.
     ///
-    /// Two build drivers own the message format and can't be asked for it:
-    /// `wasm-pack` drives its own cargo invocation without forwarding
-    /// `--message-format`, and `cargo ndk` appends
-    /// `--message-format json-render-diagnostics` of its own, which makes cargo
-    /// render the diagnostics as text on stderr instead of emitting them as
-    /// JSON. Both therefore go through [`RenderedDiagnostics`] instead, which
-    /// recovers the very same [`ErrorReport`] from that rendering.
+    /// Only the `wasm-pack` build can't be asked for JSON: it drives its own
+    /// cargo invocation without forwarding `--message-format`. Its output goes
+    /// through [`RenderedDiagnostics`] instead, which recovers the very same
+    /// [`ErrorReport`] from cargo's rendering. The Android build is a plain
+    /// cargo invocation built by `aimer_ndk`, so it is asked for JSON like the
+    /// Apple and desktop ones.
     fn speaks_cargo_json(&self) -> bool {
-        !matches!(
-            self,
-            CargoBuildTarget::Web | CargoBuildTarget::Android { .. }
-        )
+        !matches!(self, CargoBuildTarget::Web)
     }
 
     /// The target triple the build compiles for, or `None` for the host.
@@ -84,15 +80,9 @@ pub fn cargo_command(target: &CargoBuildTarget, release: bool) -> Command {
             return c;
         }
         CargoBuildTarget::Android { rust_target } => {
-            // No `--message-format` here: `cargo ndk` sets its own and cargo
-            // would then see the flag twice. Its diagnostics are scraped back
-            // out of the rendering instead — see `speaks_cargo_json`.
-            let mut c = Command::new("cargo");
-            c.arg("ndk")
-                .arg("-t")
-                .arg(rust_target)
-                .arg("build")
-                .arg("--lib");
+            // A plain `cargo build` with the NDK environment; `--release` follows below.
+            let mut c = crate::commands::aimer_ndk::build_command(rust_target, false);
+            c.arg(cargo_message::MESSAGE_FORMAT);
             c
         }
         CargoBuildTarget::Darwin => {
@@ -139,6 +129,13 @@ pub fn spawn_cargo_build(
     current_child: &Arc<Mutex<Option<Child>>>,
     release: bool,
 ) -> Option<ExitStatus> {
+    if matches!(target, CargoBuildTarget::Android { .. })
+        && let Err(error) = crate::commands::aimer_ndk::Ndk::locate()
+    {
+        let _ = tx.send(RunnerEvent::BuildLog(format!("{error:#}")));
+        let _ = tx.send(RunnerEvent::StatusChange(Status::Error));
+        return None;
+    }
     let mut cmd = cargo_command(target, release);
 
     if let Err(error) = configure_command(&mut cmd) {
@@ -147,15 +144,16 @@ pub fn spawn_cargo_build(
         return None;
     }
 
-    let mut child = match cmd.stdin(Stdio::null())
+    let mut child = match cmd
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn() {
+        .spawn()
+    {
         Ok(child) => child,
         Err(e) => {
             let label = match target {
                 CargoBuildTarget::Web => "wasm-pack build",
-                CargoBuildTarget::Android { .. } => "cargo ndk build",
                 _ => "cargo build",
             };
             let _ = tx.send(RunnerEvent::BuildLog(format!(
@@ -601,19 +599,22 @@ mod tests {
     }
 
     #[test]
-    fn the_android_build_leaves_the_message_format_to_cargo_ndk() {
-        // `cargo ndk` appends `--message-format json-render-diagnostics`
-        // itself; passing ours as well would hand cargo the flag twice.
-        let args = cargo_args(
-            &CargoBuildTarget::Android {
-                rust_target: "aarch64-linux-android".to_string(),
-            },
-            false,
+    fn the_android_build_asks_cargo_for_json_messages() {
+        let target = CargoBuildTarget::Android {
+            rust_target: "aarch64-linux-android".to_string(),
+        };
+        assert_eq!(
+            cargo_args(&target, false),
+            [
+                "build",
+                "--lib",
+                "--target",
+                "aarch64-linux-android",
+                cargo_message::MESSAGE_FORMAT
+            ]
         );
-        assert!(
-            !args.iter().any(|a| a.contains("--message-format")),
-            "{args:?}"
-        );
+        let release = cargo_args(&target, true);
+        assert_eq!(release.last().map(String::as_str), Some("--release"));
     }
 
     /// Collect every app log the reader thread produces for `input`, as the
@@ -826,16 +827,16 @@ mod tests {
             }
             .speaks_cargo_json()
         );
-        // wasm-pack drives cargo itself and drops the flag; cargo ndk overrides
-        // it with `json-render-diagnostics`. Both render their diagnostics as
-        // text, which the stderr reader scrapes back into a report.
-        assert!(!CargoBuildTarget::Web.speaks_cargo_json());
         assert!(
-            !CargoBuildTarget::Android {
-                rust_target: "arm64-v8a".to_string()
+            CargoBuildTarget::Android {
+                rust_target: "aarch64-linux-android".to_string()
             }
             .speaks_cargo_json()
         );
+        // wasm-pack drives cargo itself and drops the flag, so it renders its
+        // diagnostics as text, which the stderr reader scrapes back into a
+        // report.
+        assert!(!CargoBuildTarget::Web.speaks_cargo_json());
     }
 
     /// The report the stderr reader builds for `input`, and the build log lines
@@ -857,7 +858,7 @@ mod tests {
     }
 
     /// The rendering cargo writes on stderr when it, rather than the console,
-    /// formats the diagnostics — the case for `cargo ndk` and `wasm-pack`.
+    /// formats the diagnostics — the case for `wasm-pack`.
     const RENDERED_STDERR: &str = concat!(
         "   Compiling demo v0.1.0 (/tmp/demo)\n",
         "error[E0308]: mismatched types\n",
@@ -917,7 +918,9 @@ mod tests {
         .join("\n");
         let (tx, rx) = crossbeam::channel::unbounded();
 
-        stream_cargo_json(Cursor::new(input), tx, thread::spawn(|| 4)).join().unwrap();
+        stream_cargo_json(Cursor::new(input), tx, thread::spawn(|| 4))
+            .join()
+            .unwrap();
 
         let percentages: Vec<u8> = rx
             .try_iter()
@@ -952,7 +955,9 @@ mod tests {
             "Downloading crates ...\n Downloaded serde v1.0.228\n Downloaded 1 crates (10KiB) in 1s\n",
         );
 
-        stream_stderr_with_cargo_progress(stderr, tx, false).join().unwrap();
+        stream_stderr_with_cargo_progress(stderr, tx, false)
+            .join()
+            .unwrap();
 
         let statuses: Vec<Status> = rx
             .try_iter()

@@ -406,3 +406,26 @@ fn a_zip_is_the_bundle_under_a_clean_folder_and_needs_no_external_tool() {
     assert!(spy.steps().is_empty());
     assert!(!Path::new(dist).join(WORK_DIR_NAME).exists());
 }
+
+#[test]
+fn appimagetool_installed_by_components_is_found_without_being_on_path() {
+    let env = env_of(&[("HOME", "/home/me"), ("PATH", "/usr/bin")]);
+
+    let found = locate_appimagetool(&env, &|p| {
+        p == Path::new("/home/me/.aimer/bin/appimagetool")
+    });
+
+    assert_eq!(
+        found.unwrap(),
+        Path::new("/home/me/.aimer/bin/appimagetool")
+    );
+}
+
+#[test]
+fn a_missing_appimagetool_suggests_the_components_command() {
+    let err = locate_appimagetool(&env_of(&[]), &|_| false)
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("aimer components add appimagetool"), "{err}");
+}

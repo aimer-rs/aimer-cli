@@ -70,7 +70,10 @@ pub struct RunnerHandle {
 }
 
 impl RunnerHandle {
-    pub(crate) fn new(current_child: Arc<Mutex<Option<Child>>>, cancelled: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        current_child: Arc<Mutex<Option<Child>>>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             current_child,
             cancelled,
@@ -471,7 +474,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn terminate_stops_a_child_with_sigterm_and_reaps_it() {
-        let child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
         let pid = child.id();
 
         terminate(child);
@@ -493,7 +499,10 @@ mod tests {
         terminate(child);
 
         assert!(process_exists(pid), "SIGTERM alone must not end this child");
-        assert!(wait_until_gone(pid, TERMINATE_GRACE + Duration::from_secs(3)));
+        assert!(wait_until_gone(
+            pid,
+            TERMINATE_GRACE + Duration::from_secs(3)
+        ));
     }
 
     #[test]
