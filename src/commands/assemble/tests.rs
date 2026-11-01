@@ -404,15 +404,7 @@ fn jni_libs_dir_follows_the_abi() {
 
 #[test]
 fn xcode_command_carries_the_configuration_and_no_sdk_on_macos() {
-    let cmd = xcode_command(
-        "builds/macos",
-        "my_app",
-        "My App",
-        "Release",
-        None,
-        "arm64",
-        None,
-    );
+    let cmd = xcode_command("builds/macos", "my_app", "My App", "Release", None, "arm64");
     let args = args_of(&cmd);
     assert!(args.contains(&"-configuration".to_string()));
     assert!(args.contains(&"Release".to_string()));
@@ -422,15 +414,7 @@ fn xcode_command_carries_the_configuration_and_no_sdk_on_macos() {
 
 #[test]
 fn xcode_command_names_the_product_after_the_application() {
-    let cmd = xcode_command(
-        "builds/macos",
-        "my_app",
-        "My App",
-        "Debug",
-        None,
-        "arm64",
-        None,
-    );
+    let cmd = xcode_command("builds/macos", "my_app", "My App", "Debug", None, "arm64");
     let args = args_of(&cmd);
     // The project and target keep the Cargo package; only the product renames.
     assert!(args.contains(&"my_app.xcodeproj".to_string()));
@@ -447,23 +431,6 @@ fn macos_executable_is_named_after_the_application() {
 }
 
 #[test]
-fn xcode_command_force_loads_the_rust_archive_for_hot_reload() {
-    let cmd = xcode_command(
-        "builds/macos",
-        "my_app",
-        "my_app",
-        "Debug",
-        None,
-        "arm64",
-        Some("$(SRCROOT)/Libraries/libmy_app.a"),
-    );
-    let args = args_of(&cmd);
-    assert!(args.contains(
-        &"OTHER_LDFLAGS=$(inherited) -force_load $(SRCROOT)/Libraries/libmy_app.a".to_string()
-    ));
-}
-
-#[test]
 fn xcode_command_carries_the_sdk_on_ios() {
     let cmd = xcode_command(
         "builds/ios",
@@ -472,7 +439,6 @@ fn xcode_command_carries_the_sdk_on_ios() {
         "Debug",
         Some("iphonesimulator"),
         "arm64",
-        None,
     );
     let args = args_of(&cmd);
     assert!(args.contains(&"-sdk".to_string()));

@@ -21,9 +21,7 @@ dependencies = [
 name = "aimer_cli"
 version = "0.10.0"
 dependencies = [
- "aimer_hot_reload",
- "aimer_reload_protocol",
- "aimer_reload_server",
+ "aimer_config",
  "ansi-to-tui",
  "anyhow",
  "arboard",
@@ -33,7 +31,6 @@ dependencies = [
  "colored",
  "crossbeam",
  "crossterm",
- "ctrlc",
  "dirs",
  "flate2",
  "futures-util",
@@ -71,57 +68,19 @@ dependencies = [
  "unicode-width",
  "uuid",
  "vfs",
- "walrus",
- "wasm-bindgen-cli-support",
- "wasmparser 0.239.0",
- "zeroize",
  "zstd",
 ]
 
 [[package]]
-name = "aimer_hot_reload"
+name = "aimer_config"
 version = "0.1.0"
 dependencies = [
- "aimer_reload_protocol",
- "aimer_reload_server",
  "anyhow",
  "dirs",
- "hex",
- "notify 9.0.0-rc.5",
- "proc-macro2",
- "quote",
  "serde",
- "serde_json",
- "sha2 0.11.0",
- "syn 2.0.119",
  "tempfile",
- "thiserror 2.0.21",
  "toml",
  "tracing",
- "walrus",
- "wasm-bindgen-cli-support",
- "wasmparser 0.239.0",
- "zeroize",
-]
-
-[[package]]
-name = "aimer_reload_protocol"
-version = "0.1.0"
-dependencies = [
- "hex",
- "ring",
- "sha2 0.11.0",
- "subtle",
- "thiserror 2.0.21",
- "zeroize",
-]
-
-[[package]]
-name = "aimer_reload_server"
-version = "0.1.0"
-dependencies = [
- "aimer_reload_protocol",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -362,15 +321,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
-]
-
-[[package]]
-name = "block2"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
-dependencies = [
- "objc2",
 ]
 
 [[package]]
@@ -835,17 +785,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctrlc"
-version = "3.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
-dependencies = [
- "dispatch2",
- "nix 0.31.3",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -993,8 +932,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e0e367e4e7da84520dedcac1901e4da967309406d1e51017ae1abfb97adbd38"
 dependencies = [
  "bitflags 2.13.2",
- "block2",
- "libc",
  "objc2",
 ]
 
@@ -1110,12 +1047,6 @@ checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
 dependencies = [
  "num-traits",
 ]
-
-[[package]]
-name = "fallible-iterator"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
 
 [[package]]
 name = "fancy-regex"
@@ -1399,17 +1330,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gimli"
-version = "0.32.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
-dependencies = [
- "fallible-iterator",
- "indexmap",
- "stable_deref_trait",
-]
-
-[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1444,8 +1364,6 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
- "serde",
- "serde_core",
 ]
 
 [[package]]
@@ -1823,15 +1741,6 @@ dependencies = [
  "zerofrom",
  "zerotrie",
  "zerovec",
-]
-
-[[package]]
-name = "id-arena"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
-dependencies = [
- "rayon",
 ]
 
 [[package]]
@@ -2275,18 +2184,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
-name = "leb128"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c83bff1d572d6b9aeef67ddfc8448e4a3737909cb28e81f97c791b9018703e52"
-
-[[package]]
-name = "leb128fmt"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
-
-[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2400,7 +2297,7 @@ version = "1.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0aeb26bf5e836cc1c341c8106051b573f1766dfa05aa87f0b98be5e51b02303"
 dependencies = [
- "nix 0.29.0",
+ "nix",
  "winapi",
 ]
 
@@ -2533,18 +2430,6 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset",
-]
-
-[[package]]
-name = "nix"
-version = "0.31.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
-dependencies = [
- "bitflags 2.13.2",
- "cfg-if",
- "cfg_aliases",
- "libc",
 ]
 
 [[package]]
@@ -3748,12 +3633,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc-demangle"
-version = "0.1.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b74b56ffa8bb2830709a538c2cbcae9aa062db0d2a42563bfb09bdaae44020eb"
-
-[[package]]
 name = "rustc-hash"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4476,7 +4355,7 @@ dependencies = [
  "libc",
  "log",
  "memmem",
- "nix 0.29.0",
+ "nix",
  "num-derive",
  "num-traits",
  "ordered-float",
@@ -5121,35 +5000,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "walrus"
-version = "0.27.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e124668d1bce62ae1d2183c1e85da2b08aa53f36baa3b975427fa6f0ec2fb1e8"
-dependencies = [
- "anyhow",
- "gimli",
- "id-arena",
- "leb128",
- "log",
- "rayon",
- "walrus-macro",
- "wasm-encoder",
- "wasmparser 0.245.1",
-]
-
-[[package]]
-name = "walrus-macro"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a9b0525d7ea6e5f906aca581a172e5c91b4c595290dfa8ad4a2bc9ffef33b44"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5184,24 +5034,6 @@ dependencies = [
  "rustversion",
  "wasm-bindgen-macro",
  "wasm-bindgen-shared",
-]
-
-[[package]]
-name = "wasm-bindgen-cli-support"
-version = "0.2.129"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0724352b96c7779dcfd3f580b9e7e29beac8f4229c9a27cd2ea53e04f1cc65a"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "leb128",
- "log",
- "rustc-demangle",
- "serde",
- "serde_json",
- "walrus",
- "wasm-bindgen-shared",
- "wasmparser 0.245.1",
 ]
 
 [[package]]
@@ -5248,16 +5080,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-encoder"
-version = "0.245.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f9dca005e69bf015e45577e415b9af8c67e8ee3c0e38b5b0add5aa92581ed5c"
-dependencies = [
- "leb128fmt",
- "wasmparser 0.245.1",
-]
-
-[[package]]
 name = "wasm-streams"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5268,28 +5090,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.239.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c9d90bb93e764f6beabf1d02028c70a2156a6583e63ac4218dd07ef733368b0"
-dependencies = [
- "bitflags 2.13.2",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.245.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f08c9adee0428b7bddf3890fc27e015ac4b761cc608c822667102b8bfd6995e"
-dependencies = [
- "bitflags 2.13.2",
- "hashbrown 0.16.1",
- "indexmap",
- "semver",
- "serde",
 ]
 
 [[package]]

@@ -133,7 +133,16 @@ pub enum CargoMessage {
     /// A rustc diagnostic (`compiler-message`).
     Diagnostic(Diagnostic),
     /// A compilation unit finished (`compiler-artifact`), named by its target.
-    Artifact { target: String },
+    ///
+    /// `package_id` is the package the unit belongs to (empty when cargo did
+    /// not say), and `build_script` marks the unit that compiles a `build.rs`
+    /// rather than the package itself, so progress can count packages instead
+    /// of units.
+    Artifact {
+        target: String,
+        package_id: String,
+        build_script: bool,
+    },
     /// The build ended (`build-finished`).
     Finished { success: bool },
     /// A message the console has nothing to add to, e.g.
@@ -172,9 +181,17 @@ impl CargoMessage {
                     rendered: message.rendered,
                 })
             }
-            "compiler-artifact" => Self::Artifact {
-                target: raw.target.map(|t| t.name).unwrap_or_default(),
-            },
+            "compiler-artifact" => {
+                let (target, build_script) = raw.target.map_or_else(Default::default, |t| {
+                    let build_script = t.kind.iter().any(|kind| kind == "custom-build");
+                    (t.name, build_script)
+                });
+                Self::Artifact {
+                    target,
+                    package_id: raw.package_id.unwrap_or_default(),
+                    build_script,
+                }
+            }
             "build-finished" => Self::Finished {
                 success: raw.success.unwrap_or(false),
             },
@@ -452,12 +469,16 @@ struct RawMessage {
     #[serde(default)]
     target: Option<RawTarget>,
     #[serde(default)]
+    package_id: Option<String>,
+    #[serde(default)]
     message: Option<RawDiagnostic>,
 }
 
 #[derive(Deserialize)]
 struct RawTarget {
     name: String,
+    #[serde(default)]
+    kind: Vec<String>,
 }
 
 #[derive(Deserialize)]

@@ -8,8 +8,7 @@ When running `aimer run`, Aimer launches an interactive terminal interface (TUI)
 
 | Shortcut               | Action               | Description                                          |
 |:-----------------------|:---------------------|:-----------------------------------------------------|
-| `r`                    | **Hot Reload**       | Triggers an in-place hot reload of application code  |
-| `R` / `Shift + R`      | **Hot Restart**      | Stops the app, rebuilds, and relaunches fresh        |
+| `r` / `R`              | **Hot Restart**      | Stops the app, rebuilds, and relaunches fresh        |
 | `q` / `Shift + Q`      | **Quit**             | Gracefully stops the running app and exits the CLI   |
 | `1`                    | **App Pane**         | Focuses the Application log output pane              |
 | `2`                    | **Build Pane**       | Focuses the Compiler / Build output pane             |

@@ -180,15 +180,7 @@ fn application_log_is_separated_from_the_live_status_row() {
 }
 
 #[test]
-fn hot_reload_events_are_hidden_when_hot_reload_is_disabled() {
-    let mut session = InlineSession::new(&device());
-    session.apply_event(RunnerEvent::HotReload);
-
-    assert!(session.stages.stages().is_empty());
-}
-
-#[test]
-fn hot_reload_control_is_hidden_when_hot_reload_is_disabled() {
+fn navbar_offers_restart_and_no_reload_control() {
     let session = InlineSession::new(&device());
     let mut output = Vec::new();
     let mut renderer = InlineRenderer::new(&mut output);
@@ -197,31 +189,6 @@ fn hot_reload_control_is_hidden_when_hot_reload_is_disabled() {
     let output = String::from_utf8(output).unwrap();
     assert!(!output.contains("hot-reload"));
     assert!(output.contains("r restart"));
-}
-
-#[test]
-fn hot_reload_control_is_visible_when_hot_reload_is_enabled() {
-    let session = InlineSession::new_with_hot_reload(&device(), true);
-    let mut output = Vec::new();
-    let mut renderer = InlineRenderer::new(&mut output);
-    renderer.render(&session, 120).unwrap();
-
-    let output = String::from_utf8(output).unwrap();
-    assert!(output.contains("^R hot-reload"));
-}
-
-#[test]
-fn hot_reload_events_are_retained_when_hot_reload_is_enabled() {
-    let mut session = InlineSession::new_with_hot_reload(&device(), true);
-    session.apply_event(RunnerEvent::HotReload);
-
-    assert!(
-        session
-            .stages
-            .stages()
-            .iter()
-            .any(|stage| stage.kind() == &StageKind::HotReload)
-    );
 }
 
 #[test]
@@ -331,13 +298,13 @@ fn failed_stage_summary_and_details_are_appended_once() {
 #[test]
 fn notices_are_shown_in_the_live_region_until_they_expire() {
     let mut session = InlineSession::new(&device());
-    session.notice("Hot reload requested".to_string());
+    session.notice("Restart requested".to_string());
     let mut output = Vec::new();
     let mut renderer = InlineRenderer::new(&mut output);
 
     renderer.render(&session, 120).unwrap();
     let shown = String::from_utf8(output.clone()).unwrap();
-    assert!(shown.contains("Hot reload requested"));
+    assert!(shown.contains("Restart requested"));
 
     let expired = Instant::now() + NOTICE_VISIBLE_FOR;
     assert!(session.active_notice(expired).is_none());

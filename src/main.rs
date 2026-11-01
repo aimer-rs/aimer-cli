@@ -3,10 +3,9 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use anyhow::Context;
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use crate::commands::version::VersionCommand;
-use crate::config::{ApplicationRuntime, BuildProfile, ExecutionPolicy, ReloadPolicy};
 use crate::targets::{MigrateTarget, Targets};
 
 pub mod commands;
@@ -18,16 +17,12 @@ pub mod session;
 pub mod targets;
 pub mod tui;
 
-pub use aimer_hot_reload::config;
+pub use aimer_config as config;
 
 #[derive(Parser)]
 #[command(name = "aimer")]
 #[command(about = "Aimer Framework CLI", long_about = None)]
 struct Cli {
-    /// Select the unstable toolchain used by development-only Aimer features.
-    #[arg(value_parser = parse_toolchain_selector)]
-    toolchain: Option<ToolchainSelector>,
-
     #[command(subcommand)]
     command: Option<Commands>,
 
@@ -38,98 +33,6 @@ struct Cli {
     /// Enable verbose (debug) logging
     #[arg(long, global = true)]
     verbose: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ToolchainSelector {
-    Nightly,
-}
-
-fn parse_toolchain_selector(value: &str) -> Result<ToolchainSelector, String> {
-    match value {
-        "+nightly" => Ok(ToolchainSelector::Nightly),
-        _ => Err(format!(
-            "unsupported toolchain selector '{value}'; only '+nightly' is available"
-        )),
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum UnstableFeature {
-    #[value(name = "hot-reload")]
-    WasmHotReload,
-    /// Inline rendering is stable and the default; the flag is only accepted so
-    /// existing scripts keep working.
-    #[value(name = "inline-render", hide = true)]
-    InlineRender,
-}
-
-impl UnstableFeature {
-    #[inline]
-    fn cli_name(self) -> &'static str {
-        match self {
-            Self::WasmHotReload => "hot-reload",
-            Self::InlineRender => "inline-render",
-        }
-    }
-}
-
-impl Cli {
-    fn validate_unstable_invocation(&self) -> anyhow::Result<()> {
-        let unstable = match &self.command {
-            Some(Commands::Run { unstable, .. }) => *unstable,
-            _ => None,
-        };
-
-        if matches!(unstable, Some(UnstableFeature::InlineRender)) && self.run_uses_full_screen() {
-            anyhow::bail!("'--tui' cannot be combined with '-Z inline-render'");
-        }
-
-        match (self.toolchain, unstable) {
-            // Inline rendering graduated from the unstable set: it needs no selector.
-            (_, Some(UnstableFeature::InlineRender)) => Ok(()),
-            (Some(ToolchainSelector::Nightly), Some(_)) | (None, None) => Ok(()),
-            (None, Some(feature)) => anyhow::bail!(
-                "'-Z {}' requires the nightly selector; use 'aimer +nightly run -Z {}'",
-                feature.cli_name(),
-                feature.cli_name(),
-            ),
-            (Some(ToolchainSelector::Nightly), None) => anyhow::bail!(
-                "'+nightly' is reserved for unstable Aimer features; use 'aimer +nightly run -Z hot-reload'"
-            ),
-        }
-    }
-
-    fn run_uses_full_screen(&self) -> bool {
-        matches!(self.command, Some(Commands::Run { tui: true, .. }))
-    }
-
-    fn execution_policy(&self) -> anyhow::Result<Option<ExecutionPolicy>> {
-        self.validate_unstable_invocation()?;
-
-        let Some(Commands::Run {
-            release, unstable, ..
-        }) = self.command
-        else {
-            return Ok(None);
-        };
-
-        let profile = if release {
-            BuildProfile::Release
-        } else {
-            BuildProfile::Debug
-        };
-        let (runtime, reload) = match unstable {
-            Some(UnstableFeature::WasmHotReload) => {
-                (ApplicationRuntime::Wasmi, ReloadPolicy::HotReload)
-            }
-            Some(UnstableFeature::InlineRender) | None => {
-                (ApplicationRuntime::NativeAot, ReloadPolicy::Disabled)
-            }
-        };
-
-        ExecutionPolicy::new(profile, runtime, reload).map(Some)
-    }
 }
 
 /// Initialise the tracing subscriber. Honours `RUST_LOG` if set, otherwise
@@ -213,12 +116,6 @@ enum Commands {
         /// Build, package and launch with the release profile
         #[arg(short, long)]
         release: bool,
-        /// Enable a nightly-only unstable feature.
-        #[arg(short = 'Z', value_enum, value_name = "UNSTABLE-FEATURE")]
-        unstable: Option<UnstableFeature>,
-        /// Print every Widget IR stage after successful native materialization.
-        #[arg(long, requires = "unstable")]
-        verbose_widget_ir: bool,
         /// Do not start or register the private MCP control session.
         #[arg(long)]
         no_mcp: bool,
@@ -226,6 +123,11 @@ enum Commands {
 
     /// Expose a running Aimer session as an MCP server over stdio.
     #[cfg(feature = "mcp")]
+    #[command(group(
+        clap::ArgGroup::new("config_target")
+            .args(["install", "json", "toml"])
+            .multiple(true)
+    ))]
     Mcp {
         /// Install the Aimer MCP server for one or more supported agents.
         #[arg(
@@ -233,12 +135,20 @@ enum Commands {
             value_name = "AGENT",
             num_args = 1..,
             value_delimiter = ',',
-            conflicts_with = "attach"
+            conflicts_with_all = ["attach", "json", "toml"]
         )]
         install: Option<Vec<String>>,
-        /// Install in the user's global agent configuration instead of binding
-        /// the entry to the current Aimer project.
-        #[arg(long, requires = "install", conflicts_with_all = ["project", "attach"])]
+        /// Print the MCP server entry as JSON (Claude Code / Cursor format)
+        /// without installing it.
+        #[arg(long, conflicts_with_all = ["attach", "toml"])]
+        json: bool,
+        /// Print the MCP server entry as TOML (Codex format) without
+        /// installing it.
+        #[arg(long, conflicts_with_all = ["attach", "json"])]
+        toml: bool,
+        /// Use the user's global agent configuration instead of binding the
+        /// entry to the current project (with --install, --json or --toml).
+        #[arg(long, requires = "config_target", conflicts_with_all = ["project", "attach"])]
         global: bool,
         /// Project path used for automatic session discovery.
         #[arg(long, conflicts_with = "attach")]
@@ -246,6 +156,17 @@ enum Commands {
         /// Attach to this exact session ID.
         #[arg(long, conflicts_with = "project")]
         attach: Option<String>,
+        /// Return full, unabridged tool output instead of the compact form
+        /// (same as AIMER_MCP_FULL_OUTPUT=1).
+        #[arg(long, conflicts_with_all = ["install", "json", "toml"])]
+        full_output: bool,
+        /// Serve this client in its own process instead of sharing one
+        /// analysis engine with other agents on the same workspace.
+        #[arg(long, conflicts_with_all = ["install", "json", "toml", "host"])]
+        standalone: bool,
+        /// Run as the shared workspace host (started automatically).
+        #[arg(long, hide = true, conflicts_with_all = ["install", "json", "toml", "attach"])]
+        host: bool,
     },
 
     /// Install Aimer's Rust workflow skill for one or more coding agents.
@@ -359,7 +280,6 @@ fn main() -> anyhow::Result<()> {
     clap_complete::env::CompleteEnv::with_factory(Cli::command).complete();
 
     let cli = Cli::parse();
-    let execution_policy = cli.execution_policy()?;
     init_logging(cli.verbose);
 
     #[cfg(debug_assertions)]
@@ -400,24 +320,15 @@ fn main() -> anyhow::Result<()> {
             package,
             no_tui,
             tui,
-            release: _,
-            unstable,
-            verbose_widget_ir,
+            release,
             no_mcp,
         }) => {
-            let policy = execution_policy.expect("run commands always resolve an execution policy");
-            if matches!(unstable, Some(UnstableFeature::InlineRender)) {
-                eprintln!(
-                    "note: the inline console is now the default; '-Z inline-render' is no longer needed"
-                );
-            }
             commands::run::execute_with_package(
                 target.map(|t| t.to_string()),
                 device.clone(),
                 package.clone(),
                 *no_tui,
-                policy,
-                *verbose_widget_ir,
+                *release,
                 *tui,
                 *no_mcp,
             )?;
@@ -427,16 +338,31 @@ fn main() -> anyhow::Result<()> {
             project,
             attach,
             install,
+            json,
+            toml,
             global,
+            full_output,
+            standalone,
+            host,
         }) => {
-            if let Some(agents) = install {
-                let scope = if *global {
+            let scope = || -> anyhow::Result<commands::mcp_install::InstallScope> {
+                Ok(if *global {
                     commands::mcp_install::InstallScope::Global
                 } else {
                     commands::mcp_install::InstallScope::Project(
                         project.clone().unwrap_or(std::env::current_dir()?),
                     )
+                })
+            };
+            if *json || *toml {
+                let format = if *json {
+                    commands::mcp_install::ConfigFormat::Json
+                } else {
+                    commands::mcp_install::ConfigFormat::Toml
                 };
+                println!("{}", commands::mcp_install::render_config(format, scope()?)?);
+            } else if let Some(agents) = install {
+                let scope = scope()?;
                 let reports = commands::mcp_install::install(agents, scope)?;
                 for report in reports {
                     let state = if report.changed {
@@ -451,7 +377,14 @@ fn main() -> anyhow::Result<()> {
                     );
                 }
             } else {
-                commands::mcp::execute(project.clone(), attach.clone())?;
+                let mode = if *host {
+                    commands::mcp::ServeMode::Host
+                } else if *standalone {
+                    commands::mcp::ServeMode::Standalone
+                } else {
+                    commands::mcp::ServeMode::Shared
+                };
+                commands::mcp::execute(project.clone(), attach.clone(), *full_output, mode)?;
             }
         }
         Some(Commands::Skill { install }) => {
@@ -542,9 +475,7 @@ mod tests {
     #[cfg(debug_assertions)]
     use std::env::{current_dir, set_current_dir};
 
-    use crate::config::{ApplicationRuntime, BuildProfile, ReloadPolicy};
-
-    use super::{Cli, Commands, UnstableFeature};
+    use super::{Cli, Commands};
 
     #[cfg(debug_assertions)]
     #[test]
@@ -565,47 +496,25 @@ mod tests {
     }
 
     #[test]
-    fn nightly_wasm_hot_reload_invocation_is_accepted() {
-        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "hot-reload"]).unwrap();
-
-        assert!(cli.validate_unstable_invocation().is_ok());
+    fn ordinary_run_remains_accepted() {
+        assert!(Cli::try_parse_from(["aimer", "run"]).is_ok());
     }
 
     #[test]
-    fn nightly_inline_render_invocation_is_accepted() {
-        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "inline-render"]).unwrap();
-
-        assert!(cli.validate_unstable_invocation().is_ok());
-        assert!(matches!(
-            cli.command,
-            Some(Commands::Run {
-                unstable: Some(UnstableFeature::InlineRender),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn verbose_widget_ir_is_available_only_on_an_unstable_run() {
-        let cli = Cli::try_parse_from([
-            "aimer",
-            "+nightly",
-            "run",
-            "-Z",
-            "hot-reload",
-            "--verbose-widget-ir",
-        ])
-        .unwrap();
-        assert!(cli.validate_unstable_invocation().is_ok());
-
+    fn nightly_selector_and_unstable_flag_are_no_longer_accepted() {
+        assert!(Cli::try_parse_from(["aimer", "+nightly", "run"]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "run", "-Z", "hot-reload"]).is_err());
         assert!(Cli::try_parse_from(["aimer", "run", "--verbose-widget-ir"]).is_err());
     }
 
     #[test]
-    fn ordinary_run_remains_accepted() {
-        let cli = Cli::try_parse_from(["aimer", "run"]).unwrap();
+    fn run_accepts_the_release_flag() {
+        let cli = Cli::try_parse_from(["aimer", "run", "--release"]).unwrap();
 
-        assert!(cli.validate_unstable_invocation().is_ok());
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Run { release: true, .. })
+        ));
     }
 
     #[test]
@@ -796,8 +705,56 @@ mod tests {
 
     #[cfg(feature = "mcp")]
     #[test]
+    fn mcp_standalone_and_host_flags_parse_and_conflict() {
+        assert!(matches!(
+            Cli::try_parse_from(["aimer", "mcp", "--standalone"])
+                .unwrap()
+                .command,
+            Some(Commands::Mcp {
+                standalone: true,
+                host: false,
+                ..
+            })
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["aimer", "mcp", "--host", "--project", "."])
+                .unwrap()
+                .command,
+            Some(Commands::Mcp {
+                host: true,
+                standalone: false,
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--host", "--standalone"]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--host", "--attach", "abc"]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--standalone", "--json"]).is_err());
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
     fn mcp_global_flag_requires_install() {
         assert!(Cli::try_parse_from(["aimer", "mcp", "--global"]).is_err());
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_json_and_toml_print_without_installing() {
+        let cli = Cli::try_parse_from(["aimer", "mcp", "--json", "--global"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Mcp {
+                json: true,
+                toml: false,
+                install: None,
+                global: true,
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--toml"]).is_ok());
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--json", "--toml"]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--json", "--install", "codex"]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--toml", "--attach", "abc"]).is_err());
     }
 
     #[cfg(feature = "mcp")]
@@ -821,24 +778,6 @@ mod tests {
     }
 
     #[test]
-    fn wasm_hot_reload_requires_the_nightly_selector() {
-        let cli = Cli::try_parse_from(["aimer", "run", "-Z", "hot-reload"]).unwrap();
-
-        let error = cli.validate_unstable_invocation().unwrap_err().to_string();
-        assert!(error.contains("+nightly"));
-        assert!(error.contains("aimer +nightly run -Z hot-reload"));
-    }
-
-    #[test]
-    fn inline_render_flag_needs_no_nightly_selector() {
-        let cli = Cli::try_parse_from(["aimer", "run", "-Z", "inline-render"]).unwrap();
-
-        assert!(cli.validate_unstable_invocation().is_ok());
-        let policy = cli.execution_policy().unwrap().unwrap();
-        assert_eq!(policy.runtime(), ApplicationRuntime::NativeAot);
-    }
-
-    #[test]
     fn run_defaults_to_the_inline_console() {
         let cli = Cli::try_parse_from(["aimer", "run"]).unwrap();
 
@@ -857,111 +796,10 @@ mod tests {
         let cli = Cli::try_parse_from(["aimer", "run", "--tui"]).unwrap();
 
         assert!(matches!(cli.command, Some(Commands::Run { tui: true, .. })));
-        assert!(cli.validate_unstable_invocation().is_ok());
     }
 
     #[test]
     fn tui_and_no_tui_are_mutually_exclusive() {
         assert!(Cli::try_parse_from(["aimer", "run", "--tui", "--no-tui"]).is_err());
-    }
-
-    #[test]
-    fn tui_cannot_be_combined_with_the_inline_render_flag() {
-        let cli = Cli::try_parse_from(["aimer", "run", "--tui", "-Z", "inline-render"]).unwrap();
-
-        let error = cli.validate_unstable_invocation().unwrap_err().to_string();
-        assert!(error.contains("--tui"));
-    }
-
-    #[test]
-    fn nightly_selector_requires_the_wasm_hot_reload_flag() {
-        let cli = Cli::try_parse_from(["aimer", "+nightly", "run"]).unwrap();
-
-        let error = cli.validate_unstable_invocation().unwrap_err().to_string();
-        assert!(error.contains("-Z hot-reload"));
-    }
-
-    #[test]
-    fn unsupported_toolchain_selector_is_rejected() {
-        let error = Cli::try_parse_from(["aimer", "+stable", "run"])
-            .err()
-            .unwrap()
-            .to_string();
-
-        assert!(error.contains("+nightly"));
-    }
-
-    #[test]
-    fn unknown_unstable_feature_is_rejected() {
-        let error = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "unknown"])
-            .err()
-            .unwrap()
-            .to_string();
-
-        assert!(error.contains("hot-reload"));
-    }
-
-    #[test]
-    fn nightly_selector_after_run_is_rejected() {
-        assert!(Cli::try_parse_from(["aimer", "run", "+nightly", "-Z", "hot-reload",]).is_err());
-    }
-
-    #[test]
-    fn ordinary_debug_run_resolves_to_native_aot_without_reload() {
-        let cli = Cli::try_parse_from(["aimer", "run"]).unwrap();
-        let policy = cli.execution_policy().unwrap().unwrap();
-
-        assert_eq!(policy.profile(), BuildProfile::Debug);
-        assert_eq!(policy.runtime(), ApplicationRuntime::NativeAot);
-        assert_eq!(policy.reload(), ReloadPolicy::Disabled);
-    }
-
-    #[test]
-    fn release_run_resolves_to_native_aot_without_reload() {
-        let cli = Cli::try_parse_from(["aimer", "run", "--release"]).unwrap();
-        let policy = cli.execution_policy().unwrap().unwrap();
-
-        assert_eq!(policy.profile(), BuildProfile::Release);
-        assert_eq!(policy.runtime(), ApplicationRuntime::NativeAot);
-        assert_eq!(policy.reload(), ReloadPolicy::Disabled);
-    }
-
-    #[test]
-    fn nightly_flag_resolves_to_wasmi_hot_reload() {
-        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "hot-reload"]).unwrap();
-        let policy = cli.execution_policy().unwrap().unwrap();
-
-        assert_eq!(policy.profile(), BuildProfile::Debug);
-        assert_eq!(policy.runtime(), ApplicationRuntime::Wasmi);
-        assert_eq!(policy.reload(), ReloadPolicy::HotReload);
-    }
-
-    #[test]
-    fn nightly_inline_render_resolves_to_native_aot_without_reload() {
-        let cli = Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "inline-render"]).unwrap();
-        let policy = cli.execution_policy().unwrap().unwrap();
-
-        assert_eq!(policy.profile(), BuildProfile::Debug);
-        assert_eq!(policy.runtime(), ApplicationRuntime::NativeAot);
-        assert_eq!(policy.reload(), ReloadPolicy::Disabled);
-    }
-
-    #[test]
-    fn nightly_hot_reload_rejects_release_profile() {
-        let cli =
-            Cli::try_parse_from(["aimer", "+nightly", "run", "--release", "-Z", "hot-reload"])
-                .unwrap();
-
-        let error = cli.execution_policy().unwrap_err().to_string();
-        assert!(error.contains("profile=release"));
-        assert!(error.contains("runtime=wasmi"));
-        assert!(error.contains("reload=hot-reload"));
-    }
-
-    #[test]
-    fn former_wasm_hot_reload_spelling_is_rejected() {
-        assert!(
-            Cli::try_parse_from(["aimer", "+nightly", "run", "-Z", "wasm-hot-reload",]).is_err()
-        );
     }
 }

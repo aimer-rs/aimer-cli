@@ -58,7 +58,7 @@ fn rust_analyzer_configuration() -> Value {
 impl LspSession {
     async fn start(
         project_root: &Path,
-        config: &aimer_hot_reload::config::RustAnalyzerConfig,
+        config: &aimer_config::RustAnalyzerConfig,
         progress: &McpProgressReporter,
     ) -> anyhow::Result<Self> {
         let executable = config

@@ -4,7 +4,6 @@ use super::*;
 #[tool_router(router = ide_tool_router, vis = "pub(super)")]
 impl AimerMcpServer {
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "search_symbols",
         description = "Fuzzy-search Rust workspace symbols. Rust kind filters include trait, impl, and macro; unknown kinds are rejected. Results include crate, module_path, and is_reexport metadata."
     )]
@@ -126,7 +125,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "search_text",
         description = "Search project text, comments, and string literals. Set regex to interpret query as a Rust regular expression. Respects Git ignore rules when available and returns bounded matches."
     )]
@@ -148,9 +146,8 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "inspect_file",
-        description = "Return structured file ranges and bounded literal or regex matches. Set format to text for numbered source lines."
+        description = "Return numbered source lines and bounded literal or regex matches. Set format to json for structured ranges and matches."
     )]
     async fn rust_inspect_file(
         &self,
@@ -186,7 +183,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "get_document_symbols",
         description = "Return a compact Rust symbol outline. Defaults to depth 2 and omits local variables and fields. Filter with kinds and name_filter; matching ancestors are kept for context."
     )]
@@ -223,7 +219,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "completion",
         description = "Return Rust completion suggestions. Defaults to 50 items without documentation; request shortened documentation with include_documentation."
     )]
@@ -261,7 +256,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "get_code_lenses",
         description = "Return bounded code lenses for a Rust file, resolving their command metadata without executing commands."
     )]
@@ -310,7 +304,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "find_definition",
         description = "Find the definition of the Rust symbol at a project-relative file position."
     )]
@@ -325,7 +318,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "find_declaration",
         description = "Find the declaration of the Rust symbol at a project-relative file position."
     )]
@@ -340,7 +332,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "find_references",
         description = "Find Rust symbol references at a project-relative file position."
     )]
@@ -363,7 +354,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "find_implementations",
         description = "Find sorted, labeled Rust implementations with pagination. Provide file, line, and column or a fully qualified symbol_path such as `aimer_widget::Drawable`. Test implementations are excluded by default; file_glob and include_tests can narrow or expand results."
     )]
@@ -425,7 +415,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "type_definition",
         description = "Find the type definition of the Rust symbol at a project-relative file position."
     )]
@@ -440,7 +429,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "hover",
         description = "Return the Rust type and documentation information at a project-relative file position."
     )]
@@ -455,7 +443,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "document_highlights",
         description = "Find symbol occurrences highlighted within the current Rust document."
     )]
@@ -489,7 +476,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "signature_help",
         description = "Return function signature and active parameter information at a Rust source position."
     )]
@@ -504,7 +490,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "prepare_rename",
         description = "Check whether the Rust symbol at a source position can be renamed and return its target range and placeholder."
     )]
@@ -538,7 +523,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "inlay_hints",
         description = "Return inferred type and parameter-name hints for a Rust source range."
     )]
@@ -578,7 +562,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "get_diagnostics",
         description = "Return rust-analyzer diagnostics for files in the selected project; external Cargo registry diagnostics are omitted. Pass file to narrow the result."
     )]
@@ -596,7 +579,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "start_lsp",
         description = "Load the embedded rust-analyzer engine for project_path (absolute or relative to the current Rust project). Selecting a different directory switches the workspace for later Rust tools. Omit project_path to use the current Rust project. Waits for workspace loading and reports progress and ready status."
     )]

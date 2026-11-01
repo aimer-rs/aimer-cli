@@ -2,12 +2,25 @@ use super::*;
 
 pub(super) fn encode(operation: &str, result: anyhow::Result<Value>) -> CallToolResult {
     match result {
-        Ok(value @ Value::Object(_)) => CallToolResult::structured(value),
-        Ok(value) => CallToolResult::structured(json!({ "result": value })),
+        Ok(value) => {
+            let text = if full_output_enabled() {
+                to_markdown(&value)
+            } else {
+                trim::cap_output(to_markdown(&compact(value)))
+            };
+            CallToolResult::success(vec![ContentBlock::text(text)])
+        }
         Err(error) => {
             let message = format!("{error:#}");
             let lower_message = message.to_ascii_lowercase();
-            let (code, phase) = if operation == "check"
+            let message = if full_output_enabled() {
+                message
+            } else {
+                trim::clean_text(&message)
+            };
+            let (code, phase) = if lower_message.starts_with("workspace is busy") {
+                ("busy", "lock")
+            } else if operation == "check"
                 && (lower_message.contains("check_start_timeout")
                     || lower_message.contains("did not start flycheck"))
             {
@@ -43,14 +56,9 @@ pub(super) fn encode(operation: &str, result: anyhow::Result<Value>) -> CallTool
             } else {
                 ("operation_failed", "execution")
             };
-            CallToolResult::structured_error(json!({
-                "error": {
-                    "code": code,
-                    "operation": operation,
-                    "phase": phase,
-                    "message": message
-                }
-            }))
+            CallToolResult::error(vec![ContentBlock::text(error_markdown(
+                code, operation, phase, &message,
+            ))])
         }
     }
 }
@@ -60,7 +68,7 @@ pub(super) fn encode_inspect_file(
     format: Option<&str>,
 ) -> CallToolResult {
     match (
-        format.unwrap_or("json").to_ascii_lowercase().as_str(),
+        format.unwrap_or("text").to_ascii_lowercase().as_str(),
         result,
     ) {
         ("json", Ok(value)) => {
@@ -161,11 +169,4 @@ fn inspect_file_text(value: &Value) -> String {
         lines.push(format!("[truncated source lines: {numbers}]"));
     }
     lines.join("\n")
-}
-
-pub(super) fn mcp_result_schema() -> Arc<Map<String, Value>> {
-    let mut schema = Map::new();
-    schema.insert("type".to_owned(), json!("object"));
-    schema.insert("additionalProperties".to_owned(), json!(true));
-    Arc::new(schema)
 }

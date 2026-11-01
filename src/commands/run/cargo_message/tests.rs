@@ -73,12 +73,28 @@ fn parse_reads_a_failure_note_without_making_it_an_error() {
 
 #[test]
 fn parse_reads_an_artifact() {
-    let line = r#"{"reason":"compiler-artifact","target":{"name":"aimer_app","kind":["lib"]},"filenames":[]}"#;
+    let line = r#"{"reason":"compiler-artifact","package_id":"aimer_app 0.1.0","target":{"name":"aimer_app","kind":["lib"]},"filenames":[]}"#;
 
     assert_eq!(
         CargoMessage::parse(line),
         Some(CargoMessage::Artifact {
-            target: "aimer_app".to_string()
+            target: "aimer_app".to_string(),
+            package_id: "aimer_app 0.1.0".to_string(),
+            build_script: false,
+        })
+    );
+}
+
+#[test]
+fn parse_flags_a_build_script_artifact() {
+    let line = r#"{"reason":"compiler-artifact","package_id":"dep 1.0.0","target":{"name":"build-script-build","kind":["custom-build"]}}"#;
+
+    assert_eq!(
+        CargoMessage::parse(line),
+        Some(CargoMessage::Artifact {
+            target: "build-script-build".to_string(),
+            package_id: "dep 1.0.0".to_string(),
+            build_script: true,
         })
     );
 }

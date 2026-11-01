@@ -9,6 +9,7 @@ use crossbeam::channel::Sender;
 use crate::commands::assemble::link_flags;
 use crate::commands::run::capability_sources::configure_command;
 use crate::commands::run::cargo_message::{self, CargoMessage, ErrorReport, RenderedDiagnostics};
+use crate::commands::run::cargo_units::{self, UnitTracker};
 use crate::commands::run::console::{RunnerEvent, Status};
 use crate::commands::run::utilities::LogStyling;
 
@@ -50,6 +51,18 @@ impl CargoBuildTarget {
             self,
             CargoBuildTarget::Web | CargoBuildTarget::Android { .. }
         )
+    }
+
+    /// The target triple the build compiles for, or `None` for the host.
+    fn platform(&self) -> Option<String> {
+        match self {
+            CargoBuildTarget::Darwin => Some("aarch64-apple-darwin".to_string()),
+            CargoBuildTarget::Ios { rust_target }
+            | CargoBuildTarget::IosSim { rust_target }
+            | CargoBuildTarget::Android { rust_target } => Some(rust_target.clone()),
+            CargoBuildTarget::Desktop { .. } => None,
+            CargoBuildTarget::Web => Some("wasm32-unknown-unknown".to_string()),
+        }
     }
 }
 
@@ -164,7 +177,8 @@ pub fn spawn_cargo_build(
     // below is unaffected by the message format.
     let speaks_json = target.speaks_cargo_json();
     let json_reader = if speaks_json {
-        Some(stream_cargo_json(stdout, tx.clone()))
+        let expected = cargo_units::estimate_in_background(target.platform());
+        Some(stream_cargo_json(stdout, tx.clone(), expected))
     } else {
         let _ = stream_stdout_as_build_log(stdout, tx.clone());
         None
@@ -200,24 +214,39 @@ pub fn spawn_cargo_build(
 ///
 /// The [`ErrorReport`] the thread returns is what [`spawn_cargo_build`] appends
 /// once the build is over.
+///
+/// `expected` resolves to the number of packages the build compiles, the
+/// denominator of the compile percentage; the percentage counts each package
+/// once, however many units cargo builds for it.
 pub fn stream_cargo_json(
     stdout: impl Read + Send + 'static,
     tx: Sender<RunnerEvent>,
+    expected: thread::JoinHandle<usize>,
 ) -> thread::JoinHandle<ErrorReport> {
     thread::spawn(move || {
         let reader = BufReader::new(stdout);
         let mut report = ErrorReport::new();
         // Cargo announces every unit it finishes, including the ones it found
-        // fresh, so counting them measures the walk through the dependency graph
-        // even when almost everything was already built.
-        let total_units = cargo_lock_package_count();
-        let mut finished_units: usize = 0;
+        // fresh, so counting the packages they belong to measures the walk
+        // through the dependency graph even when almost everything was already
+        // built.
+        let mut expected = Some(expected);
+        let mut tracker: Option<(UnitTracker, usize)> = None;
         for l in reader.lines().map_while(Result::ok) {
             match CargoMessage::parse(&l) {
-                Some(CargoMessage::Artifact { .. }) => {
-                    finished_units += 1;
-                    let pct = compile_progress(finished_units, total_units);
-                    let _ = tx.send(RunnerEvent::StatusChange(Status::Compiling(pct)));
+                Some(CargoMessage::Artifact {
+                    package_id,
+                    build_script,
+                    ..
+                }) => {
+                    let (tracker, total) = tracker.get_or_insert_with(|| {
+                        let total = expected.take().and_then(|h| h.join().ok());
+                        (UnitTracker::default(), total.unwrap_or(0))
+                    });
+                    if let Some(done) = tracker.finish(&package_id, build_script) {
+                        let pct = compile_progress(done, *total);
+                        let _ = tx.send(RunnerEvent::StatusChange(Status::Compiling(pct)));
+                    }
                 }
                 Some(CargoMessage::Diagnostic(diagnostic)) => {
                     report.record(&diagnostic);
@@ -268,9 +297,9 @@ pub fn stream_stderr_with_cargo_progress(
         let reader = BufReader::new(stderr);
         // Resolved package count gives the compile progress a real denominator,
         // so the percentage tracks the build instead of sticking at 99%.
-        let total_units = cargo_lock_package_count();
+        let total_units = cargo_units::lock_package_count();
         // Upper bound for the crates a build can download: those from a registry.
-        let total_downloads = cargo_lock_registry_count();
+        let total_downloads = cargo_units::lock_registry_count();
         let mut scraper = RenderedDiagnostics::new();
         let mut fetch_count = 0;
         let mut download_count: usize = 0;
@@ -313,42 +342,6 @@ pub fn stream_stderr_with_cargo_progress(
         }
         scraper.finish()
     })
-}
-
-/// Count the resolved packages in the workspace `Cargo.lock` (each
-/// `[[package]]` entry). This is used as an upper-bound denominator for the
-/// compile progress percentage. Walks up from the current directory to find the
-/// lock file and returns 0 when it can't be located, in which case the caller
-/// falls back to an asymptotic estimate.
-fn cargo_lock_package_count() -> usize {
-    read_cargo_lock().map_or(0, |lock| {
-        lock.lines().filter(|l| l.trim() == "[[package]]").count()
-    })
-}
-
-/// Count the packages in `Cargo.lock` that come from a registry, the only ones
-/// a build can download. Returns 0 when the lock file can't be located.
-fn cargo_lock_registry_count() -> usize {
-    read_cargo_lock().map_or(0, |lock| {
-        lock.lines()
-            .filter(|l| l.trim_start().starts_with("source = \"registry+"))
-            .count()
-    })
-}
-
-/// The contents of the nearest `Cargo.lock` that lists packages, searching
-/// upward from the current directory.
-fn read_cargo_lock() -> Option<String> {
-    let mut dir = std::env::current_dir().ok();
-    while let Some(d) = dir {
-        if let Ok(contents) = std::fs::read_to_string(d.join("Cargo.lock"))
-            && contents.contains("[[package]]")
-        {
-            return Some(contents);
-        }
-        dir = d.parent().map(|p| p.to_path_buf());
-    }
-    None
 }
 
 /// Whether `line` is cargo's closing `Downloaded 12 crates (3.4MiB) in 2.1s`
@@ -700,7 +693,7 @@ mod tests {
     /// plus the report it hands back, as plain text.
     fn cargo_json_build(input: &str) -> (Vec<String>, Vec<String>) {
         let (tx, rx) = crossbeam::channel::unbounded();
-        let reader = stream_cargo_json(Cursor::new(input.to_string()), tx);
+        let reader = stream_cargo_json(Cursor::new(input.to_string()), tx, thread::spawn(|| 0));
         let report = reader.join().expect("reader thread");
         let mut lines = Vec::new();
         while let Ok(event) = rx.try_recv() {
@@ -908,15 +901,23 @@ mod tests {
 
     #[test]
     fn finished_units_advance_the_compile_percentage_even_when_fresh() {
-        let artifact = |name: &str| {
+        let artifact = |name: &str, kind: &str| {
             format!(
-                r#"{{"reason":"compiler-artifact","target":{{"name":"{name}","kind":["lib"]}},"fresh":true}}"#
+                r#"{{"reason":"compiler-artifact","package_id":"{name}","target":{{"name":"{name}","kind":["{kind}"]}},"fresh":true}}"#
             )
         };
-        let input = format!("{}\n{}\n{}\n", artifact("a"), artifact("b"), artifact("c"));
+        // `a` has a build script and a second build: it still counts once.
+        let input = [
+            artifact("a", "custom-build"),
+            artifact("a", "lib"),
+            artifact("a", "lib"),
+            artifact("b", "lib"),
+            artifact("c", "lib"),
+        ]
+        .join("\n");
         let (tx, rx) = crossbeam::channel::unbounded();
 
-        stream_cargo_json(Cursor::new(input), tx).join().unwrap();
+        stream_cargo_json(Cursor::new(input), tx, thread::spawn(|| 4)).join().unwrap();
 
         let percentages: Vec<u8> = rx
             .try_iter()
@@ -925,9 +926,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(percentages.len(), 3, "one update per finished unit");
-        assert!(percentages.windows(2).all(|pair| pair[0] <= pair[1]));
-        assert!(percentages.iter().all(|pct| *pct <= 99));
+        assert_eq!(percentages, [25, 50, 75], "one update per finished package");
     }
 
     #[test]

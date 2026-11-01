@@ -284,7 +284,7 @@ fn style_plain(line: String) -> StyledLog {
         line.red().to_string()
     } else if line.contains("[WARN]") {
         line.yellow().to_string()
-    } else if line.contains("[DEBUG]") || line.contains("hot-reload") {
+    } else if line.contains("[DEBUG]") {
         line.green().to_string()
     } else if line.contains("[INFO]") {
         line.bright_cyan().to_string()
@@ -318,12 +318,6 @@ mod tests {
     fn process_log_debug_contains_original_text() {
         let result = styled("[DEBUG] trace info");
         assert!(result.contains("[DEBUG] trace info"));
-    }
-
-    #[test]
-    fn process_log_hot_reload_contains_original_text() {
-        let result = styled("hot-reload triggered");
-        assert!(result.contains("hot-reload triggered"));
     }
 
     #[test]
@@ -615,15 +609,5 @@ mod tests {
         // Also confirm a pure WARN is styled differently
         let warn_result = styled("[WARN] conflict");
         assert_ne!(result, warn_result);
-    }
-
-    #[test]
-    fn process_log_hot_reload_in_middle() {
-        let result = styled("something hot-reload happened");
-        // hot-reload is in the DEBUG branch
-        let debug = styled("[DEBUG] something");
-        // Both go through the green branch — verify they're both styled
-        assert_ne!(result, "something hot-reload happened");
-        assert_ne!(debug, "[DEBUG] something");
     }
 }

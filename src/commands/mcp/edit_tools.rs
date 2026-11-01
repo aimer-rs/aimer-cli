@@ -3,7 +3,6 @@ use super::*;
 #[tool_router(router = edit_tool_router, vis = "pub(super)")]
 impl AimerMcpServer {
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "get_code_actions",
         description = "List code actions available for a project-relative source range."
     )]
@@ -34,7 +33,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "rename_symbol",
         description = "Prepare a semantic symbol rename and return a preview. Possible unedited identifiers in macro_rules! bodies are listed separately and are never added automatically; apply the preview with apply_edit."
     )]
@@ -58,7 +56,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "preview_code_action",
         description = "Resolve a code action and return a preview; apply it with apply_edit."
     )]
@@ -76,7 +73,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "preview_edit",
         description = "Preview exact text edits and file create/delete operations in the selected Rust project. Edit anchors must match exactly once; the tool returns bounded diffs and a preview_id. Apply a reviewed preview with apply_edit."
     )]
@@ -92,7 +88,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "format",
         description = "Format a Rust file or range and return a preview; apply it with apply_edit."
     )]
@@ -127,7 +122,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "apply_edit",
         description = "Apply a previously reviewed Rust code, source-edit, or Cargo.toml preview if its source files are unchanged and any required manifest validation passed."
     )]

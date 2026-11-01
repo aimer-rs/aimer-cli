@@ -11,14 +11,10 @@ aimer_cli/
 │   ├── console/              # Interactive TUI, Ratatui rendering, hotkey mappings
 │   ├── session.rs            # Live session registry and IPC control server
 │   └── targets.rs            # Target definitions and host architecture detection
-├── aimer_hot_reload/         # Hot-reload pipeline, shadow guest generation, AST rewriting
-├── aimer_reload_protocol/    # Cryptographic handshake, wire protocol, payload serialization
-├── aimer_reload_server/      # Bridge server between the CLI runner and guest runtime
+├── aimer_config/             # `Aimer.toml` manifest, signing metadata, and user configuration
 └── templates/                # Bundled project scaffolding and platform templates
 ```
 
 - **`aimer_cli`**: The user-facing command-line interface, device manager, and orchestration engine.
-- **`aimer_hot_reload`**: Manages source file watching, shadow package generation, and hot-reload guest compilation.
-- **`aimer_reload_protocol`**: Implements authenticated, encrypted IPC channels between the CLI and the running
-  application.
-- **`aimer_reload_server`**: Embedded WebSocket/IPC communication server facilitating live reloads.
+- **`aimer_config`**: Parses the `Aimer.toml` project manifest, per-platform signing metadata, and the user-level
+  configuration for MCP and the resource monitor.

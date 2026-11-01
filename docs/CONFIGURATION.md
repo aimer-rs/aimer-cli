@@ -42,12 +42,6 @@ team_id = "ABCDE12345"
 [android.signing]
 keystore = "keys/upload.jks"
 key_alias = "upload"
-
-# Optional hot-reload guest configuration (unstable / nightly)
-[build.hot_reload]
-package = "my_aimer_app"
-program = "my_aimer_app::AppProgram"
-limits = "my_aimer_app::APP_LIMITS"
 ```
 
 ---

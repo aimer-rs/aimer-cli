@@ -262,7 +262,7 @@ pub fn runner_for(target: Targets) -> Option<Box<dyn Runner>> {
     }
 }
 
-/// Shared wasm-pack web build used by both the initial run and hot reloads.
+/// Shared wasm-pack web build used by the initial run.
 ///
 /// Spawns the build on a background thread and streams its stdout/stderr back
 /// as [`RunnerEvent`]s, de-duplicating what used to be two copies of this

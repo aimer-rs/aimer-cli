@@ -71,12 +71,9 @@ aimer run [OPTIONS]
 | `--tui`               |      | Use the full-screen TUI console instead of the default inline console (conflicts with `--no-tui`)  |
 | `--no-tui`            |      | Disable the interactive console and stream plain logs to stdout/stderr (ideal for CI and IDEs)     |
 | `--no-mcp`            |      | Disable the background private MCP control session                                                 |
-| `-Z <FEATURE>`        |      | Enable nightly-only unstable features (`hot-reload`)                                               |
-| `--verbose-widget-ir` |      | Print every Widget IR stage after native materialization (requires `-Z`)                           |
 | `--verbose`           |      | Enable debug-level CLI logging                                                                     |
 
-See [Interactive Developer Console](CONSOLE.md) for keyboard shortcuts, and
-[Hot Reload & Unstable Features](HOT_RELOAD.md) for `-Z hot-reload`.
+See [Interactive Developer Console](CONSOLE.md) for keyboard shortcuts.
 
 ---
 
@@ -482,7 +479,7 @@ aimer completions <SHELL> [--install]
 
 ## `aimer mcp`
 
-> Requires a build with the `mcp` feature (or `bundled-proc-macro` / `legacy-lsp`, which imply it). See [Installation](INSTALLATION.md).
+> Included in default builds (the `mcp` feature); not available with `--no-default-features`. The proc-macro helper is only bundled with `bundled-proc-macro`. See [Installation](INSTALLATION.md).
 
 Runs an MCP (Model Context Protocol) stdio server for Rust project tools and crate documentation. When the selected
 project is an Aimer project with a live session, it also exposes session controls, logs, and resource monitoring. The
@@ -493,8 +490,14 @@ specific live Aimer session when the project has more than one.
 # Install MCP into AI agents:
 aimer mcp --install <claude|cursor|codex> [--global] [--project <PATH>]
 
-# Run the MCP stdio adapter:
-aimer mcp [--project <PATH>] [--attach <SESSION_ID>]
+# Print the config entry to stdout without installing it
+# (--json for Claude Code / Cursor, --toml for Codex):
+aimer mcp <--json|--toml> [--global] [--project <PATH>]
+
+# Run the MCP stdio adapter. By default it shares one analysis engine with
+# other agents on the same workspace; --standalone keeps it in this process.
+# --full-output disables compact tool output (same as AIMER_MCP_FULL_OUTPUT=1):
+aimer mcp [--project <PATH>] [--attach <SESSION_ID>] [--full-output] [--standalone]
 ```
 
 See [Model Context Protocol (MCP) Integration](MCP.md) for supported agents and the full tool list.

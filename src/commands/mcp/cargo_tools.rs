@@ -3,9 +3,8 @@ use super::*;
 #[tool_router(router = cargo_tool_router, vis = "pub(super)")]
 impl AimerMcpServer {
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "get_manifest",
-        description = "Read a Cargo.toml as structured JSON. Omit manifest_path to read the selected Rust project's Cargo.toml."
+        description = "Read a Cargo.toml as compact markdown. Omit manifest_path to read the selected Rust project's Cargo.toml."
     )]
     async fn rust_get_manifest(
         &self,
@@ -16,7 +15,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "get_project_metadata",
         description = "Return a compact Cargo workspace and package summary. Set detail to full to include complete bounded dependency and resolution metadata."
     )]
@@ -34,7 +32,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "preview_manifest_edit",
         description = "Preview ordered set/remove operations on a Cargo.toml key path. The candidate is parsed and checked with Cargo metadata in a temporary workspace; use apply_edit to apply an applicable preview."
     )]
@@ -75,7 +72,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "cargo_check",
         description = "Run cargo check for the selected workspace or package. Returns Cargo's actual exit code and bounded output; filters and counts rustc warnings and routine Compiling/Checking/Finished progress lines. Cargo runs offline unless the existing rust-analyzer network setting opts in."
     )]
@@ -97,7 +93,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "cargo_test",
         description = "Run cargo test for the selected workspace or package, optionally with a test name filter. Returns Cargo's actual exit code and bounded output; filters and counts rustc warnings and routine Compiling/Checking/Finished progress lines. Cargo runs offline unless the existing rust-analyzer network setting opts in."
     )]
@@ -119,7 +114,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "cargo_run",
         description = "Build and run the selected project's default binary, a named binary, or an example. Program arguments are passed after `--`. Runs in the foreground with a 60-second default timeout (up to 300 seconds); returns bounded program output and the real exit code. Rust/build-script warnings and routine Cargo build progress are filtered and counted. Cargo runs offline unless the existing rust-analyzer network setting opts in."
     )]
@@ -140,7 +134,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "check",
         description = "Run cargo clippy --workspace -- -D warnings directly. Returns Cargo's actual exit code and bounded structured diagnostics; routine Compiling/Checking/Finished progress lines are filtered and counted. Cargo runs offline unless user config opts in to network access."
     )]

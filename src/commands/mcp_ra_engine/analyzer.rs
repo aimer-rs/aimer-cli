@@ -3,7 +3,7 @@ use super::*;
 impl EmbeddedRustAnalyzer {
     pub(crate) fn load(
         root: PathBuf,
-        config: &aimer_hot_reload::config::RustAnalyzerConfig,
+        config: &aimer_config::RustAnalyzerConfig,
         report_progress: &(dyn Fn(String) + Sync),
     ) -> anyhow::Result<Self> {
         let mut cargo_config = CargoConfig::default();

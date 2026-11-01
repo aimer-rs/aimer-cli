@@ -9,6 +9,10 @@ use crate::resource_monitor::ResourceMonitorStatus;
 /// Maximum number of log lines retained per pane before old lines are dropped.
 pub const MAX_LINES: usize = 32768;
 
+/// Start of the notice cargo prints while it queues behind another cargo
+/// process that holds the lock on the build directory.
+pub const BUILD_LOCK_WAIT_PREFIX: &str = "Blocking waiting for file lock";
+
 /// The runner lifecycle status shown in the status bar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -37,7 +41,6 @@ pub enum RunnerEvent {
     /// out for its own width, exactly like a [`BuildReport`](Self::BuildReport).
     AppPanic(PanicReport),
     StatusChange(Status),
-    HotReload,
 }
 
 impl From<AppOutput> for RunnerEvent {
@@ -274,6 +277,9 @@ pub struct AppState {
     /// groups. Enabled by the full-screen TUI and left off in inline mode.
     collapse_repeated_app_logs: bool,
     pub status: Status,
+    /// The cargo lock-wait notice and when the wait began, while the build is
+    /// queued behind another cargo process. Cleared by the next status change.
+    pub build_lock_wait: Option<(String, std::time::Instant)>,
     pub pane: ConsoleType,
     /// Latest resource monitor sample from the live run session.
     pub resource_monitor: ResourceMonitorStatus,
@@ -316,6 +322,7 @@ impl AppState {
             show_log_source: false,
             collapse_repeated_app_logs,
             status: Status::Compiling(0),
+            build_lock_wait: None,
             pane: ConsoleType::App,
             resource_monitor: ResourceMonitorStatus::default(),
             build_pane: ScrollablePane::new(),
@@ -335,6 +342,14 @@ impl AppState {
     /// The line is parsed into its rendered rows here rather than at draw time,
     /// so a frame costs the same whatever the backlog holds.
     pub fn push_build_log(&mut self, msg: String) {
+        if msg.trim_start().starts_with(BUILD_LOCK_WAIT_PREFIX) {
+            // Cargo repeats the notice; the wait began at the first one.
+            let since = self
+                .build_lock_wait
+                .as_ref()
+                .map_or_else(std::time::Instant::now, |(_, since)| *since);
+            self.build_lock_wait = Some((msg.trim().to_string(), since));
+        }
         let width = self.build_width;
         self.build_logs
             .push(BuildEntry::Line(msg.replace('\r', "")), move |entry| {
@@ -552,6 +567,7 @@ impl AppState {
 
     /// Apply a status change, focusing the most relevant pane.
     pub fn apply_status(&mut self, status: Status) {
+        self.build_lock_wait = None;
         match status {
             Status::Error => self.pane = ConsoleType::Build,
             Status::Running => self.pane = ConsoleType::App,

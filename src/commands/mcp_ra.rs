@@ -118,10 +118,22 @@ impl McpProgressReporter {
 #[derive(Clone)]
 pub struct RustAnalyzerBridge {
     project_root: Arc<std::sync::RwLock<PathBuf>>,
-    config: aimer_hot_reload::config::RustAnalyzerConfig,
+    config: aimer_config::RustAnalyzerConfig,
     session: Arc<Mutex<Option<EmbeddedRustAnalyzer>>>,
-    actions: Arc<Mutex<HashMap<String, Value>>>,
+    /// Code actions keyed by ID, with the owning client alongside the action.
+    actions: Arc<Mutex<HashMap<String, (String, Value)>>>,
     previews: Arc<Mutex<HashMap<String, EditPreview>>>,
+}
+
+tokio::task_local! {
+    /// Identity of the MCP client whose request is being served. Previews and
+    /// code actions are only usable by the client that created them.
+    pub static CLIENT_ID: String;
+}
+
+/// The current client's identity, or an empty string outside a client scope.
+pub(crate) fn current_client() -> String {
+    CLIENT_ID.try_with(Clone::clone).unwrap_or_default()
 }
 
 #[derive(Clone, Debug)]

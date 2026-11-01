@@ -2,10 +2,10 @@ pub mod android;
 pub(crate) mod capability_sources;
 pub(crate) mod cargo_build;
 pub(crate) mod cargo_message;
+pub(crate) mod cargo_units;
 pub mod desktop;
 pub(crate) mod framed_block;
 pub(crate) mod helpers;
-pub(crate) mod hot_reload_runtime;
 pub mod ios;
 pub mod macos;
 pub(crate) mod panic_report;
@@ -26,7 +26,6 @@ use std::time::Duration;
 use std::{fmt, process, thread};
 
 use crate::commands::run::utilities::get_project_root;
-use crate::config::{ApplicationRuntime, BuildProfile, ExecutionPolicy, ReloadPolicy};
 use crate::console;
 use crate::errors::AimerError;
 use crate::targets::Targets;
@@ -46,8 +45,12 @@ impl fmt::Display for Device {
     }
 }
 
-fn fetch_devices() -> Vec<Device> {
-    let mut devices = vec![
+/// Devices that need no probing: the host desktop and the web browser.
+///
+/// Available instantly, so the picker can open before the slow Android and iOS
+/// scans of [`fetch_devices`] finish.
+fn host_devices() -> Vec<Device> {
+    vec![
         #[cfg(target_os = "macos")]
         Device {
             name: "macOS Desktop".to_string(),
@@ -71,7 +74,27 @@ fn fetch_devices() -> Vec<Device> {
             target: Targets::Web,
             id: "web".to_string(),
         },
-    ];
+    ]
+}
+
+/// The "Quit" entry that always ends the picker list.
+fn quit_device() -> Device {
+    Device {
+        name: "Quit".to_string(),
+        target: Terminated,
+        id: "q".to_string(),
+    }
+}
+
+/// The device list available without running any external tool.
+fn quick_devices() -> Vec<Device> {
+    let mut devices = host_devices();
+    devices.push(quit_device());
+    devices
+}
+
+fn fetch_devices() -> Vec<Device> {
+    let mut devices = host_devices();
 
     // Android Devices
     #[allow(clippy::collapsible_if)]
@@ -240,55 +263,20 @@ fn fetch_devices() -> Vec<Device> {
         }
     }
 
-    unique_devices.push(Device {
-        name: "Quit".to_string(),
-        target: Terminated,
-        id: "q".to_string(),
-    });
+    unique_devices.push(quit_device());
 
     unique_devices
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PipelineSelection {
-    Native { release: bool },
-    HotReload,
-}
-
-fn native_pipeline_release(policy: ExecutionPolicy) -> PipelineSelection {
-    match (policy.runtime(), policy.reload()) {
-        (ApplicationRuntime::NativeAot, ReloadPolicy::Disabled) => PipelineSelection::Native {
-            release: policy.profile() == BuildProfile::Release,
-        },
-        (ApplicationRuntime::Wasmi, ReloadPolicy::HotReload) => PipelineSelection::HotReload,
-        _ => unreachable!("ExecutionPolicy guarantees a supported runtime and reload combination"),
-    }
-}
-
-#[inline]
-fn manifest_is_optional(policy: ExecutionPolicy) -> bool {
-    native_pipeline_release(policy) == PipelineSelection::HotReload
 }
 
 pub fn execute(
     target: Option<String>,
     device: Option<String>,
     no_tui: bool,
-    policy: ExecutionPolicy,
-    verbose_widget_ir: bool,
+    release: bool,
     tui: bool,
     no_mcp: bool,
 ) -> anyhow::Result<()> {
-    execute_with_package(
-        target,
-        device,
-        None,
-        no_tui,
-        policy,
-        verbose_widget_ir,
-        tui,
-        no_mcp,
-    )
+    execute_with_package(target, device, None, no_tui, release, tui, no_mcp)
 }
 
 pub fn execute_with_package(
@@ -296,20 +284,15 @@ pub fn execute_with_package(
     device: Option<String>,
     package: Option<String>,
     no_tui: bool,
-    policy: ExecutionPolicy,
-    verbose_widget_ir: bool,
+    release: bool,
     tui: bool,
     no_mcp: bool,
 ) -> anyhow::Result<()> {
     let project = crate::commands::project_selection::select_aimer_project(package.as_deref())?;
     let _project_directory = project.enter()?;
-    let selection = native_pipeline_release(policy);
-
     let project_root =
         get_project_root(false).map_err(|_| anyhow!("aimer.toml not found in project root"))?;
-    if crate::config::AimerManifest::load_from(&project_root)?.is_none()
-        && !manifest_is_optional(policy)
-    {
+    if crate::config::AimerManifest::load_from(&project_root)?.is_none() {
         return Err(anyhow!("aimer.toml not found in project root"));
     }
     let selected_device = if target.is_some() || device.is_some() || no_tui {
@@ -319,7 +302,9 @@ pub fn execute_with_package(
         // Interactive picker mode.
         println!("Finding available devices...\n");
 
-        let devices_arc = Arc::new(Mutex::new(fetch_devices()));
+        // Open the picker with the instant devices; the scan for Android and
+        // iOS devices shells out to slow tools and runs in the background.
+        let devices_arc = Arc::new(Mutex::new(quick_devices()));
         let devices_arc_clone = Arc::clone(&devices_arc);
         let has_selected = Arc::new(AtomicBool::new(false));
         let selected_clone = has_selected.clone();
@@ -328,11 +313,14 @@ pub fn execute_with_package(
                 if selected_clone.load(Ordering::Relaxed) {
                     break;
                 }
-                thread::sleep(Duration::from_millis(200));
                 let new_devices = fetch_devices();
+                if selected_clone.load(Ordering::Relaxed) {
+                    break;
+                }
                 if let Ok(mut devs) = devices_arc_clone.lock() {
                     *devs = new_devices;
                 }
+                thread::sleep(Duration::from_millis(200));
             }
         });
 
@@ -350,54 +338,32 @@ pub fn execute_with_package(
 
     let pkg_name = crate::config::resolve_cargo_package_name(std::path::Path::new("."));
 
-    let session_runtime = if selection != PipelineSelection::HotReload {
-        let configuration = crate::session::RunConfiguration {
-            project_root: project_root.clone(),
-            target: selected_device.target.to_string(),
-            device: Some(selected_device.id.clone()),
-            execution_policy: format!(
-                "{}/{}/{}",
-                policy.profile(),
-                policy.runtime(),
-                policy.reload()
-            ),
-            parent_pid: std::process::id(),
-        };
-        let mcp_enabled = !no_mcp && crate::config::mcp_auto_start();
-        let start = if mcp_enabled {
-            crate::session::SessionRuntime::start(configuration)
-        } else {
-            crate::session::SessionRuntime::start_monitor_only(configuration)
-        };
-        match start {
-            Ok(runtime) => Some(runtime),
-            Err(error) => {
-                let feature = if mcp_enabled {
-                    "MCP control and resource monitoring"
-                } else {
-                    "resource monitoring"
-                };
-                eprintln!("warning: {feature} is unavailable: {error}");
-                None
-            }
-        }
+    let configuration = crate::session::RunConfiguration {
+        project_root: project_root.clone(),
+        target: selected_device.target.to_string(),
+        device: Some(selected_device.id.clone()),
+        execution_policy: if release { "release" } else { "debug" }.to_string(),
+        parent_pid: std::process::id(),
+    };
+    let mcp_enabled = !no_mcp && crate::config::mcp_auto_start();
+    let start = if mcp_enabled {
+        crate::session::SessionRuntime::start(configuration)
     } else {
-        None
+        crate::session::SessionRuntime::start_monitor_only(configuration)
+    };
+    let session_runtime = match start {
+        Ok(runtime) => Some(runtime),
+        Err(error) => {
+            let feature = if mcp_enabled {
+                "MCP control and resource monitoring"
+            } else {
+                "resource monitoring"
+            };
+            eprintln!("warning: {feature} is unavailable: {error}");
+            None
+        }
     };
     let session = session_runtime.as_ref().map(|runtime| runtime.handle());
-
-    if selection == PipelineSelection::HotReload {
-        return run_hot_reload(
-            project_root,
-            selected_device,
-            pkg_name,
-            policy,
-            verbose_widget_ir,
-        );
-    }
-    let PipelineSelection::Native { release } = selection else {
-        unreachable!("hot reload returned before native console selection")
-    };
 
     if no_tui {
         console::start_no_tui(selected_device, pkg_name, release, session)
@@ -406,75 +372,10 @@ pub fn execute_with_package(
         console::start(selected_device, pkg_name, release, session)
             .context("interactive console exited with an error")?;
     } else {
-        console::start_inline(
-            selected_device,
-            pkg_name,
-            release,
-            policy.reload() == ReloadPolicy::HotReload,
-            session,
-        )
-        .context("inline console exited with an error")?;
+        console::start_inline(selected_device, pkg_name, release, session)
+            .context("inline console exited with an error")?;
     }
     Ok(())
-}
-
-fn run_hot_reload(
-    project_root: std::path::PathBuf,
-    device: Device,
-    package: String,
-    _: ExecutionPolicy,
-    verbose_widget_ir: bool,
-) -> anyhow::Result<()> {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    use aimer_cli::config::{
-        ApplicationRuntime as LibraryRuntime, BuildProfile as LibraryProfile,
-        ExecutionPolicy as LibraryPolicy, ReloadPolicy as LibraryReload,
-    };
-    use aimer_cli::hot_reload::pipeline::{ProductionPipelineDriver, run_pipeline};
-    use aimer_cli::hot_reload::system::{SystemDevice, SystemPipelineOperations};
-    use aimer_cli::hot_reload::targets::TargetFamily;
-
-    use self::hot_reload_runtime::CliHotReloadRuntime;
-
-    let family = match device.target {
-        Targets::Macos => TargetFamily::Macos,
-        Targets::Windows => TargetFamily::Windows,
-        Targets::Linux => TargetFamily::Linux,
-        Targets::Android | Targets::AndroidSimulator => TargetFamily::Android,
-        Targets::Ios => TargetFamily::IosDevice,
-        Targets::IosSimulator => TargetFamily::IosSimulator,
-        Targets::Web => TargetFamily::Web,
-        Targets::Terminated => anyhow::bail!("cannot launch the terminated device selection"),
-    };
-    let framework_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .ok_or_else(|| anyhow!("failed to locate the Aimer framework workspace"))?
-        .to_owned();
-    let policy = LibraryPolicy::new(
-        LibraryProfile::Debug,
-        LibraryRuntime::Wasmi,
-        LibraryReload::HotReload,
-    )?;
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let interrupt_shutdown = Arc::clone(&shutdown);
-    ctrlc::set_handler(move || interrupt_shutdown.store(true, Ordering::Release))
-        .context("failed to install hot-reload shutdown handler")?;
-    let system_device = SystemDevice::new(device.name, family, device.id);
-    let operations = SystemPipelineOperations::with_runtime(
-        project_root,
-        framework_root,
-        policy,
-        system_device,
-        package,
-        Arc::new(CliHotReloadRuntime::new()),
-    )
-    .shutdown_signal(shutdown)
-    .widget_ir_diagnostics(verbose_widget_ir)
-    .status_output(|status| eprintln!("{status}"));
-    let mut driver = ProductionPipelineDriver::new(operations);
-    run_pipeline(&mut driver).map_err(anyhow::Error::msg)
 }
 
 /// Resolve a device non-interactively from `--device <id>` and/or `--target
@@ -653,65 +554,6 @@ fn pick_device(devices_arc: &Arc<Mutex<Vec<Device>>>) -> anyhow::Result<Option<D
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn native_pipeline_uses_the_policy_profile() {
-        let debug = ExecutionPolicy::new(
-            BuildProfile::Debug,
-            ApplicationRuntime::NativeAot,
-            ReloadPolicy::Disabled,
-        )
-        .unwrap();
-        let release = ExecutionPolicy::new(
-            BuildProfile::Release,
-            ApplicationRuntime::NativeAot,
-            ReloadPolicy::Disabled,
-        )
-        .unwrap();
-
-        assert_eq!(
-            native_pipeline_release(debug),
-            PipelineSelection::Native { release: false }
-        );
-        assert_eq!(
-            native_pipeline_release(release),
-            PipelineSelection::Native { release: true }
-        );
-    }
-
-    #[test]
-    fn wasm_policy_never_falls_through_to_the_native_pipeline() {
-        let policy = ExecutionPolicy::new(
-            BuildProfile::Debug,
-            ApplicationRuntime::Wasmi,
-            ReloadPolicy::HotReload,
-        )
-        .unwrap();
-
-        assert_eq!(
-            native_pipeline_release(policy),
-            PipelineSelection::HotReload
-        );
-    }
-
-    #[test]
-    fn missing_aimer_manifest_is_allowed_only_for_automatic_hot_reload() {
-        let hot_reload = ExecutionPolicy::new(
-            BuildProfile::Debug,
-            ApplicationRuntime::Wasmi,
-            ReloadPolicy::HotReload,
-        )
-        .unwrap();
-        let native = ExecutionPolicy::new(
-            BuildProfile::Debug,
-            ApplicationRuntime::NativeAot,
-            ReloadPolicy::Disabled,
-        )
-        .unwrap();
-
-        assert!(manifest_is_optional(hot_reload));
-        assert!(!manifest_is_optional(native));
-    }
 
     // ── Device struct ────────────────────────────────────────────────
 

@@ -60,16 +60,17 @@ fn global_mcp_discovery_rejects_directories_without_project_manifest() {
 }
 
 #[test]
-fn encode_returns_structured_content_and_actionable_check_errors() {
+fn encode_returns_compact_markdown_and_actionable_check_errors() {
     let success = encode(
         "search_symbols",
         Ok(json!({ "results": [], "truncated": false })),
     );
-    assert_eq!(
-        success.structured_content,
-        Some(json!({ "results": [], "truncated": false }))
-    );
+    assert_eq!(success.structured_content, None);
     assert_eq!(success.is_error, Some(false));
+    assert_eq!(
+        success.content[0].as_text().map(|text| text.text.as_str()),
+        Some("- results: []\n- truncated: false")
+    );
 
     let error = encode(
         "check",
@@ -78,17 +79,32 @@ fn encode_returns_structured_content_and_actionable_check_errors() {
         )),
     );
     assert_eq!(error.is_error, Some(true));
+    assert_eq!(error.structured_content, None);
     assert_eq!(
-        error.structured_content,
-        Some(json!({
-            "error": {
-                "code": "check_start_timeout",
-                "operation": "check",
-                "phase": "start",
-                "message": "rust-analyzer did not start flycheck within 30 seconds"
-            }
-        }))
+        error.content[0].as_text().map(|text| text.text.as_str()),
+        Some(
+            "**Error `check_start_timeout`** (check, phase: start): rust-analyzer did not start flycheck within 30 seconds"
+        )
     );
+}
+
+#[test]
+fn inspect_file_defaults_to_text_and_keeps_json_opt_in() {
+    let value = json!({
+        "file": "src/lib.rs",
+        "ranges": [{ "start_line": 3, "text": "fn main() {}" }]
+    });
+
+    let default = encode_inspect_file(Ok(value.clone()), None);
+    assert_eq!(default.structured_content, None);
+    assert!(
+        default.content[0]
+            .as_text()
+            .is_some_and(|text| text.text.contains("    3 | fn main() {}"))
+    );
+
+    let structured = encode_inspect_file(Ok(value.clone()), Some("json"));
+    assert_eq!(structured.structured_content, Some(value));
 }
 
 #[test]

@@ -153,7 +153,7 @@ async fn failed_manifest_validation_prevents_apply_and_keeps_file_unchanged() {
     fs::write(&manifest, before).unwrap();
     let bridge = RustAnalyzerBridge::new(
         temporary.path().to_path_buf(),
-        aimer_hot_reload::config::RustAnalyzerConfig::default(),
+        aimer_config::RustAnalyzerConfig::default(),
     );
     let preview = bridge
         .prepare_manifest_content_preview(

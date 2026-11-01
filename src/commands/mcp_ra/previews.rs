@@ -4,8 +4,10 @@ impl RustAnalyzerBridge {
     pub async fn apply_preview(&self, preview_id: &str) -> anyhow::Result<Value> {
         let preview = {
             let mut previews = self.previews.lock().await;
+            let owner = current_client();
             let existing = previews
                 .get(preview_id)
+                .filter(|preview| preview.owner == owner)
                 .ok_or_else(|| anyhow!("unknown, expired, or already applied edit preview"))?;
             if !existing.applicable {
                 bail!("edit preview cannot be applied because its validation failed");
@@ -524,6 +526,7 @@ impl RustAnalyzerBridge {
                 source_validation: source_validation.clone(),
                 applicable,
                 created_at: Instant::now(),
+                owner: current_client(),
             },
         );
         let mut result = json!({ "changed": true, "preview_id": preview_id, "files": file_views });

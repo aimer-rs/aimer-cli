@@ -6,10 +6,9 @@
 //! the bottom of the terminal.
 
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::{self, IsTerminal, Write, stdout};
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use arboard::Clipboard;
@@ -24,13 +23,12 @@ use crate::console::hotkeys::{ConsoleAction, ConsolePane, map_key_event};
 use crate::console::input;
 use crate::console::inspector::InspectorServer;
 use crate::console::stage::{StageBook, StageId, StageKind, StageProgress, StageStatus};
-use crate::console::state::{AppState, RunnerEvent, Status, strip_ansi};
+use crate::console::state::{AppState, BUILD_LOCK_WAIT_PREFIX, RunnerEvent, Status, strip_ansi};
 use crate::session::{LogStream, SessionCommand, SessionHandle};
 use crate::targets::Targets;
 use crate::tui::RawModeGuard;
 
 const SPINNERS: [&str; 10] = ["⠋", "⠙", "⠚", "⠞", "⠖", "⠦", "⠴", "⠲", "⠳", "⠓"];
-const BUILD_LOCK_WAIT_PREFIX: &str = "Blocking waiting for file lock";
 const NOTICE_VISIBLE_FOR: Duration = Duration::from_secs(4);
 
 /// State shared by the inline renderer and its input handler.
@@ -43,7 +41,6 @@ pub struct InlineSession {
     pub stages: StageBook,
     /// Current live-status spinner frame.
     pub frame: usize,
-    hot_reload_enabled: bool,
     notice: Option<(String, Instant)>,
     // The cargo message and when the wait began.
     build_lock_wait: Option<(String, Instant)>,
@@ -52,17 +49,11 @@ pub struct InlineSession {
 impl InlineSession {
     /// Create an empty inline session for `device`.
     pub fn new(device: &Device) -> Self {
-        Self::new_with_hot_reload(device, false)
-    }
-
-    /// Create an inline session with explicit hot-reload capability.
-    pub fn new_with_hot_reload(device: &Device, hot_reload_enabled: bool) -> Self {
         Self {
             target: device.to_string(),
             state: AppState::new(),
             stages: StageBook::new(),
             frame: 0,
-            hot_reload_enabled,
             notice: None,
             build_lock_wait: None,
         }
@@ -95,12 +86,6 @@ impl InlineSession {
                 }
             }
             RunnerEvent::StatusChange(status) => self.apply_status(status),
-            RunnerEvent::HotReload if self.hot_reload_enabled => {
-                self.notice("File change detected; rebuilding...".to_string());
-                let stage = self.ensure_detail_stage(StageKind::HotReload);
-                let _ = self.stages.append_detail(stage, "File change detected");
-            }
-            RunnerEvent::HotReload => {}
         }
     }
 
@@ -348,7 +333,7 @@ impl<W: Write> InlineRenderer<W> {
         if let Some(notice) = session.active_notice(now) {
             live_lines.push(render_notice(notice, width));
         }
-        live_lines.push(render_navbar(session, width));
+        live_lines.push(render_navbar(width));
         // The cursor rests at the end of the last live row, so rows are joined
         // by newlines rather than terminated by them.
         let last = live_lines.len() - 1;
@@ -514,13 +499,9 @@ fn render_notice(notice: &str, width: usize) -> String {
     fit_line(format!("  {notice}"), width).yellow().to_string()
 }
 
-fn render_navbar(session: &InlineSession, width: usize) -> String {
-    let mut navbar = String::from("  ↑/↓ select · ");
-    if session.hot_reload_enabled {
-        navbar.push_str("^R hot-reload · ");
-    }
-    navbar.push_str("r restart · ⏎ expand · ⇧Q quit");
-    fit_line(navbar, width).dimmed().to_string()
+fn render_navbar(width: usize) -> String {
+    let navbar = "  ↑/↓ select · r restart · ⏎ expand · ⇧Q quit";
+    fit_line(navbar.to_string(), width).dimmed().to_string()
 }
 
 #[cfg(test)]
@@ -562,7 +543,7 @@ fn render_managed_lines(
         lines.push(format!("  {notice}"));
     }
     lines.push(String::new());
-    lines.push(render_navbar(session, width));
+    lines.push(render_navbar(width));
     lines.push("  1 app · 2 build · 3 inspector · F12 inspector".to_string());
 
     lines
@@ -708,7 +689,6 @@ pub fn start(
     device: Device,
     pkg_name: String,
     release: bool,
-    hot_reload_enabled: bool,
     control_session: Option<SessionHandle>,
 ) -> anyhow::Result<()> {
     // Raw mode needs a terminal on both ends: without one (a pipe, CI, an IDE's
@@ -729,22 +709,6 @@ pub fn start(
         InspectorServer::start(inspector_server_address, 9229, inspector_runtime.handle())
             .context("failed to start inspector server")?;
 
-    let project_root = super::get_project_root(false)
-        .map_err(|_| anyhow::anyhow!("failed to get project root"))?;
-    let mut file_writer = if hot_reload_enabled && device.target == Targets::Web {
-        let lib_path = project_root.join("src/main.rs");
-        Some(
-            File::options()
-                .append(true)
-                .read(true)
-                .create(false)
-                .open(lib_path)
-                .context("failed to open src/main.rs for inline reload")?,
-        )
-    } else {
-        None
-    };
-
     let mut current_child = super::spawn_runner(
         device.clone(),
         pkg_name.clone(),
@@ -755,11 +719,14 @@ pub fn start(
         control_session.clone(),
     );
 
-    let mut session = InlineSession::new_with_hot_reload(&device, hot_reload_enabled);
+    let mut session = InlineSession::new(&device);
     let mut renderer = InlineRenderer::new(stdout());
     let tick_rate = Duration::from_millis(100);
     let mut last_tick = Instant::now();
     let mut quit = false;
+    let mut title_reporter = super::terminal_title::TitleReporter::new(
+        &crate::config::resolve_package_name(std::path::Path::new(".")),
+    );
 
     while !quit {
         while let Some(command) = control_session
@@ -817,19 +784,28 @@ pub fn start(
         if quit {
             break;
         }
-        while let Ok(event) = rx.try_recv() {
-            super::observe_session_event(control_session.as_ref(), &event);
-            session.apply_event(event);
-        }
+        let backlog = super::event_drain::drain_events(
+            &rx,
+            super::event_drain::EVENT_BUDGET,
+            |event| {
+                super::observe_session_event(control_session.as_ref(), &event);
+                session.apply_event(event);
+            },
+        );
+        title_reporter.update(&session.state.status);
 
         let width = terminal::size()
             .map(|(width, _)| width as usize)
             .unwrap_or(120);
         renderer.render(&session, width)?;
 
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or(Duration::ZERO);
+        let timeout = if backlog {
+            Duration::ZERO
+        } else {
+            tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or(Duration::ZERO)
+        };
         for event in input::drain_terminal(timeout)? {
             let Event::Key(key) = event else {
                 continue;
@@ -841,21 +817,6 @@ pub fn start(
                 ConsoleAction::Quit => {
                     current_child.stop();
                     quit = true;
-                }
-                ConsoleAction::HotReload => {
-                    if !hot_reload_enabled {
-                        continue;
-                    }
-                    if let Some(file_writer) = file_writer.as_mut() {
-                        file_writer.write_all(b" ")?;
-                        file_writer.set_modified(SystemTime::now())?;
-                        session.notice("Hot reload requested".to_string());
-                    } else {
-                        session.notice(
-                            "Hot reload is unavailable for this target; press r to restart"
-                                .to_string(),
-                        );
-                    }
                 }
                 ConsoleAction::HotRestart => {
                     if let Some(control_session) = control_session.as_ref()

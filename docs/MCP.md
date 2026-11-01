@@ -32,6 +32,22 @@ aimer mcp --install claude --global
 aimer mcp --install claude --project /path/to/rust-project
 ```
 
+To only see the configuration without changing any agent's files, print it instead:
+
+```bash
+# JSON entry (`mcpServers`), the format used by Claude Code and Cursor
+aimer mcp --json
+
+# TOML entry (`mcp_servers`), the format used by Codex
+aimer mcp --toml
+
+# Unbound entry, or bound to a specific project
+aimer mcp --json --global
+aimer mcp --toml --project /path/to/rust-project
+```
+
+`--json` and `--toml` write only to stdout. They cannot be combined with each other, `--install`, or `--attach`.
+
 For a global install, start Claude Code from inside a Rust project containing `Cargo.toml` or an Aimer project
 containing `Aimer.toml`. Rust navigation, editing, Cargo, and crate documentation tools work in either project type.
 Aimer session controls need a live Aimer session; resource recording history needs an Aimer project.
@@ -53,7 +69,7 @@ Once connected, your AI assistant can execute the following tools:
 - `get_crate_docs`: Read crate or item documentation from docs.rs, or installed Rust toolchain documentation for `std`, `core`, `alloc`, `proc_macro`, and `test`. A trait lookup includes its rendered declaration, method signatures, required/provided status, and each method's documentation. The tool resolves an omitted version from the selected Rust project's `Cargo.lock` and caches the crate's Rustdoc JSON index for offline lookups.
 - `search_crate_docs`: Search public item names, paths, and documentation text within a crate. Results include item paths and short documentation summaries; pass a result's path to `get_crate_docs` to read the full item documentation.
 - `start_lsp`: Load the embedded rust-analyzer engine for `project_path`; waits for workspace loading with progress notifications and returns ready status. `project_path` may be an absolute path or a path relative to the current Rust project. Omitting it uses the current project.
-- `search_symbols`, `search_text`, `inspect_file`, `get_document_symbols`, and `completion`: Search Rust workspace symbols and project text, inspect structured bounded file ranges alongside literal or regex matches (or numbered plain text with `format: "text"`), inspect a compact filtered symbol outline, or get up to 50 completion suggestions without documentation by default. Symbol searches accept Rust kinds such as `trait`, `impl`, and `macro` and return crate, module, and re-export metadata.
+- `search_symbols`, `search_text`, `inspect_file`, `get_document_symbols`, and `completion`: Search Rust workspace symbols and project text, inspect bounded file ranges alongside literal or regex matches as numbered plain text (or structured JSON with `format: "json"`), inspect a compact filtered symbol outline, or get up to 50 completion suggestions without documentation by default. Symbol searches accept Rust kinds such as `trait`, `impl`, and `macro` and return crate, module, and re-export metadata.
 - `find_definition`, `find_declaration`, `type_definition`, `find_references`, `find_implementations`, `hover`, `get_call_hierarchy`, and `expand_macro`: Navigate Rust code using rust-analyzer's semantic model. Implementation results include deterministic ordering, labels, pagination, test filtering, and completeness metadata; `find_implementations` also accepts a qualified `symbol_path`.
 - `signature_help`, `document_highlights`, `inlay_hints`, and `get_code_lenses`: Inspect call signatures, local symbol occurrences, inferred hints, and code lenses.
 - `get_diagnostics` and `check`: Read native Rust diagnostics or run `cargo clippy --workspace -- -D warnings`, returning Cargo's actual exit code and bounded diagnostics.
@@ -63,6 +79,63 @@ Once connected, your AI assistant can execute the following tools:
 - `preview_manifest_edit`: Preview ordered `set` or `remove` operations on a `Cargo.toml` key path. The tool parses the candidate and runs Cargo metadata in a temporary workspace; invalid previews cannot be applied. Apply an applicable preview with `apply_edit`.
 - `cargo_check` and `cargo_test`: Run Cargo check or test for the selected workspace or a package and return the actual exit code with bounded stdout and stderr. Rustc warning diagnostics are filtered from the output and counted in `warnings_filtered`; routine `Compiling`, `Checking`, and `Finished` lines are filtered and counted in `cargo_progress_lines_filtered`. Other compiler diagnostics and test output remain visible. Both tools accept target and feature selection; test also accepts a test-name filter. `locked` defaults to Cargo's normal behavior, and the result reports whether `Cargo.lock` changed. Each call has a five-minute timeout.
 - `cargo_run`: Build and run the selected project's default binary, a named binary, or an example. Pass application arguments in `program_args`; set `timeout_seconds` from 1 to 300 (default 60). The bounded result preserves program output and the real exit code, while filtering and counting Rust/build-script warnings and routine Cargo build progress.
+
+### Output format
+
+Tool results are compact markdown that keeps only the essential information:
+
+- Each diagnostic is shown as its `file:line:column` location followed by the compiler's rendered text; the separate `line`, `column`, `code`, `message`, `severity` and `source` fields are dropped.
+- Zero counts (`warning_count`, `*_filtered`, `duration_ms`), `false` `*_truncated` flags, empty `stdout`/`stderr`, and the top-level `operation` (the tool name) are omitted.
+- `stderr` keeps errors; Cargo's "generated N warnings" summary lines are removed.
+- Search and navigation results are listed one per line, not as a table:
+  - `search_text`: `- path/to/file.rs:line:column matched text`
+  - `search_symbols`: `- path/to/file.rs:line:column kind name (module_path)`, with `[reexport]` appended for re-exports
+  - `find_definition`, `find_declaration`, `find_references`, `type_definition`: `- path/to/file.rs:line:column`
+  - `find_implementations`: `- path/to/file.rs:line impl header`, with `[test]` appended for test implementations
+- Small values are kept on one line instead of being spread over several:
+  - A short list of single-line scalars is joined with commas, for example `- tags: a, b`. This applies when the joined text is at most 300 characters; longer lists print one item per line.
+  - A small object whose values are all single-line scalars prints as `key=value, key=value`, for example `- range: end_line=7, start_line=3`. Keys appear in alphabetical order and null fields are skipped. This applies when the joined text is at most 120 characters.
+  - The same rule applies to objects inside a list: a flat object becomes one `- key=value, key=value` line with no `[n]` index header, while an object with nested values or longer text keeps its `- [n]` header and nested bullets.
+- Terminal colour codes and trailing blanks are stripped, and runs of blank lines are collapsed.
+- Size limits keep a single call from flooding the agent: a text field over 4,000 characters keeps its head and tail with an `omitted` note, a list over 50 items is cut with a `<name>_omitted` count, and a whole response is capped at about 24,000 characters.
+
+Example of the inline layout:
+
+```markdown
+- name: demo
+- tags: a, b
+- position: column=4, line=12
+- dependencies:
+  - name=serde, optional=false, version=1.0
+  - name=tokio, optional=true, version=1.40
+```
+
+To get the full, unabridged output instead, start the server with `--full-output` or set `AIMER_MCP_FULL_OUTPUT=1` in the server's environment:
+
+```bash
+aimer mcp --full-output
+```
+
+### Sharing one workspace between agents
+
+By default `aimer mcp` is a thin proxy. The first one for a workspace starts a background host that owns the Rust analysis engine; later ones attach to it, so several agents on the same workspace (for example Claude Code and Codex) share one engine instead of each indexing the project. The host listens on loopback only, requires a per-host token, keeps its record in `~/.aimer/mcp-hosts/` (directory `0700`, file `0600`), and exits about a minute after its last client leaves. Workspaces are keyed on their canonical root, so symlinked or nested paths resolve to the same host.
+
+Tool calls follow a readers-writer rule, with a fair queue so a waiting write is not starved by new reads:
+
+| Class | Tools | Rule |
+|---|---|---|
+| Read | search, find, hover, `inspect_file`, diagnostics, docs, `get_*`, and every preview tool (`preview_edit`, `rename_symbol`, `format`, `preview_code_action`, `preview_manifest_edit`) | Any number at once |
+| Build | `cargo_check`, `cargo_test`, `cargo_run`, `check` | Run beside reads, one at a time |
+| Write | `apply_edit`, `start_lsp` | Runs alone |
+| Session | `restart_project`, `stop_project`, `clear_logs`, `set_resource_monitor_interval`, `record_resource_usage` | One at a time; control the running app, not the workspace files |
+
+A call that cannot get its lock within a minute (five for builds) returns a `busy` error that names the current holder; retry it shortly. Unlisted tools are treated as writes.
+
+Previews and code actions belong to the client that created them: another client cannot apply them, and they are dropped when that client disconnects. A preview still fails if its files changed since it was made. `status` lists connected clients and lock holders when the workspace is shared.
+
+Output format (`--full-output`) is chosen per client. Pass `--standalone` to keep the old one-process-per-client behavior. `--attach` always serves standalone, because it is bound to one live session. If no host can be reached, `aimer mcp` falls back to standalone automatically.
+
+### Rust engine configuration
 
 Rust code tools load the embedded IDE engine on the first request. A custom proc-macro helper path can override the bundled helper, and Cargo network policy can be set in `~/.aimer/config.toml`:
 

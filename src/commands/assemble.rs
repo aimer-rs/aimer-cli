@@ -252,7 +252,6 @@ fn xcode_command(
     configuration: &str,
     sdk: Option<&str>,
     arch: &str,
-    force_load_library: Option<&str>,
 ) -> Command {
     let mut cmd = Command::new("xcodebuild");
     cmd.arg("-project")
@@ -263,9 +262,6 @@ fn xcode_command(
         .arg(configuration);
     if let Some(sdk) = sdk {
         cmd.arg("-sdk").arg(sdk);
-    }
-    if let Some(library) = force_load_library {
-        cmd.arg(format!("OTHER_LDFLAGS=$(inherited) -force_load {library}"));
     }
     // The scaffold names the product after its target, which is the Cargo
     // package; the override makes the bundle carry the application name.
@@ -405,28 +401,6 @@ pub(crate) fn package_macos(
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<String> {
-    package_macos_with_options(pkg_name, release, reporter, false)
-}
-
-/// Package a macOS hot-reload host with the Rust archive force-loaded.
-///
-/// The force-load is scoped to this packaging path because portable widget
-/// registrations are linker-only symbols. Normal macOS builds retain their
-/// existing linker behavior.
-pub(crate) fn package_macos_for_hot_reload(
-    pkg_name: &str,
-    release: bool,
-    reporter: &dyn Reporter,
-) -> anyhow::Result<String> {
-    package_macos_with_options(pkg_name, release, reporter, true)
-}
-
-fn package_macos_with_options(
-    pkg_name: &str,
-    release: bool,
-    reporter: &dyn Reporter,
-    force_load_rust_library: bool,
-) -> anyhow::Result<String> {
     let lib_name = lib_name_of(pkg_name);
     let src_lib = artifact_path(MACOS_RUST_TARGET, &lib_name, release, ".a");
     copy_lib(
@@ -448,8 +422,6 @@ fn package_macos_with_options(
     clean_bundle(&artifact)?;
 
     let arch = host_arch();
-    let force_load_library =
-        force_load_rust_library.then(|| format!("$(SRCROOT)/Libraries/lib{lib_name}.a"));
     reporter.note(format!("Building Xcode project for {arch}..."));
     reporter.run(
         xcode_command(
@@ -459,7 +431,6 @@ fn package_macos_with_options(
             xcode_configuration(release),
             None,
             arch,
-            force_load_library.as_deref(),
         ),
         Step::new(StepKind::Xcode, "xcodebuild for macOS"),
     )?;
@@ -572,7 +543,6 @@ pub(crate) fn package_ios(
             xcode_configuration(release),
             Some(plan.sdk),
             plan.arch,
-            None,
         ),
         Step::new(StepKind::Xcode, "xcodebuild for iOS"),
     )?;

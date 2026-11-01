@@ -31,13 +31,14 @@ rustup component add rustc-dev
 cargo install --path .
 ```
 
-The default build is the lightweight CLI: it does not include the `aimer mcp`
-server, the embedded rust-analyzer engine, or the proc-macro helper, and it does
-not need `rustc-dev`. Opt in with Cargo features:
+The default build includes the `aimer mcp` server and the embedded rust-analyzer
+IDE engine, but does not bundle the proc-macro helper, so it does not need
+`rustc-dev`. Opt in to more with Cargo features, or drop the default with
+`--no-default-features` for a lightweight CLI without MCP:
 
 | Feature | Adds |
 | --- | --- |
-| `mcp` | The `aimer mcp` server and the embedded rust-analyzer IDE engine. |
+| `mcp` (default) | The `aimer mcp` server and the embedded rust-analyzer IDE engine. |
 | `bundled-proc-macro` | Everything in `mcp`, plus the matching proc-macro helper bundled in the executable. |
 | `legacy-lsp` | Everything in `mcp`, plus the legacy LSP-shaped MCP tools. |
 
@@ -49,8 +50,8 @@ cargo install --path . --features bundled-proc-macro
 With `bundled-proc-macro`, the build compiles the helper with
 `RUSTC_BOOTSTRAP=1`, and at startup Aimer extracts it into a private temporary
 directory and launches it as a child process. No separate helper installation
-or `rust-analyzer` executable on `PATH` is needed. Builds with only `mcp` can
-use a helper beside `aimer`, or a helper selected with `proc_macro_server_path`.
+or `rust-analyzer` executable on `PATH` is needed. Default builds can use a
+helper beside `aimer`, or a helper selected with `proc_macro_server_path`.
 
 Verify the installation:
 

@@ -7,9 +7,9 @@ resolver = "3"
 build = "build.rs"
 
 [features]
-# The default build is the lightweight CLI: no MCP server, embedded
-# rust-analyzer, or proc-macro helper.
-default = []
+# The default build includes the MCP server but does not bundle the
+# proc-macro helper; opt in with `bundled-proc-macro`.
+default = ["mcp"]
 # The `aimer mcp` server and the embedded rust-analyzer IDE engine behind it.
 mcp = [
   "dep:rmcp",
@@ -25,8 +25,6 @@ mcp = [
 ]
 # Bundle the matching Rust Analyzer proc-macro server in the Aimer executable.
 bundled-proc-macro = ["mcp"]
-# Opt in to integration tests that build and execute generated hot-reload guests.
-hot-reload = []
 # Expose the legacy LSP-shaped tool surface from the MCP server.
 legacy-lsp = ["mcp"]
 
@@ -40,8 +38,7 @@ name = "aimer_cli"
 path = "src/lib.rs"
 
 [dependencies]
-aimer_reload_protocol.workspace = true
-aimer_hot_reload.workspace = true
+aimer_config.workspace = true
 
 # Non-local
 ra_ap_ide = { package = "ide", git = "https://github.com/Cottons29/aimer-rust-analyzer", branch = "release", optional = true }
@@ -76,7 +73,6 @@ rmcp = { workspace = true, optional = true }
 ansi-to-tui.workspace = true
 clap.workspace = true
 crossterm.workspace = true
-ctrlc.workspace = true
 inquire.workspace = true
 ratatui.workspace = true
 arboard.workspace = true
@@ -94,12 +90,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 sha2.workspace = true
 hex.workspace = true
-wasmparser.workspace = true
-walrus.workspace = true
-zeroize.workspace = true
 syn.workspace = true
 quote.workspace = true
-wasm-bindgen-cli-support.workspace = true
 notify.workspace = true
 proc-macro2.workspace = true
 regex.workspace = true
@@ -109,10 +101,6 @@ regex.workspace = true
 libc = "0.2"
 
 
-[dev-dependencies]
-aimer_reload_server.workspace = true
-
-
 [build-dependencies]
 chrono.workspace = true
 
@@ -120,17 +108,13 @@ chrono.workspace = true
 [workspace]
 members = [
   ".",
-  "aimer_hot_reload",
-  "aimer_reload_protocol",
-  "aimer_reload_server",
+  "aimer_config",
 ]
 
 
 [workspace.dependencies]
 
-aimer_reload_protocol = { path = "aimer_reload_protocol" }
-aimer_reload_server = { path = "aimer_reload_server" }
-aimer_hot_reload = { path = "aimer_hot_reload" }
+aimer_config = { path = "aimer_config" }
 
 # Crates.io dependencies
 
@@ -154,12 +138,9 @@ dirs = "6.0.0"
 sysinfo = { version = "0.37.2", default-features = false, features = [
   "system",
 ] }
-walrus = "0.27.2"
-wasmparser = { version = "0.239.0", default-features = false }
 rmcp = { version = "3.2.0", features = ["transport-io"] }
 colored = "3.1.1"
 crossterm = "0.29.0"
-ctrlc = "3.5.2"
 clap = { version = "4.6.1", features = ["derive"] }
 inquire = "0.9.4"
 ratatui = "0.30.2"
@@ -178,9 +159,7 @@ sha2 = "0.11.0"
 hex = "0.4.3"
 ring = "0.17.14"
 subtle = "2.6.1"
-zeroize = "1.8.2"
 syn = { version = "2.0.118", features = ["full", "visit", "visit-mut"] }
 quote = "1.0.47"
-wasm-bindgen-cli-support = "0.2.128"
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
 regex = "1.13.1"

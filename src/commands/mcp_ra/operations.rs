@@ -3,7 +3,7 @@ use super::*;
 impl RustAnalyzerBridge {
     pub fn new(
         project_root: PathBuf,
-        config: aimer_hot_reload::config::RustAnalyzerConfig,
+        config: aimer_config::RustAnalyzerConfig,
     ) -> Self {
         Self {
             project_root: Arc::new(std::sync::RwLock::new(project_root)),
@@ -170,6 +170,18 @@ impl RustAnalyzerBridge {
             .diagnostics(filter.as_deref())
     }
 
+    /// Drop the previews and code actions a disconnected client left behind.
+    pub async fn release_client(&self, client: &str) {
+        self.actions
+            .lock()
+            .await
+            .retain(|_, (owner, _)| owner != client);
+        self.previews
+            .lock()
+            .await
+            .retain(|_, preview| preview.owner != client);
+    }
+
     pub async fn get_code_actions(
         &self,
         file: &Path,
@@ -189,15 +201,16 @@ impl RustAnalyzerBridge {
             )
             .await?;
         let actions = result.as_array().cloned().unwrap_or_default();
+        let owner = current_client();
         let mut action_store = self.actions.lock().await;
-        action_store.clear();
+        action_store.retain(|_, (action_owner, _)| *action_owner != owner);
         let results = actions
             .into_iter()
             .take(MAX_RESULTS)
             .filter_map(|action| {
                 let title = action.get("title")?.as_str()?.to_owned();
                 let id = Uuid::new_v4().to_string();
-                action_store.insert(id.clone(), action.clone());
+                action_store.insert(id.clone(), (owner.clone(), action.clone()));
                 Some(json!({
                     "action_id": id,
                     "title": title,
@@ -238,12 +251,14 @@ impl RustAnalyzerBridge {
         action_id: &str,
         progress: &McpProgressReporter,
     ) -> anyhow::Result<Value> {
+        let owner = current_client();
         let action = self
             .actions
             .lock()
             .await
             .get(action_id)
-            .cloned()
+            .filter(|(action_owner, _)| *action_owner == owner)
+            .map(|(_, action)| action.clone())
             .ok_or_else(|| anyhow!("unknown or expired code action ID"))?;
         let action = if action.get("edit").is_none() {
             self.request("codeAction/resolve", action, progress).await?

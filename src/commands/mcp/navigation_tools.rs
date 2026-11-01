@@ -3,7 +3,6 @@ use super::*;
 #[tool_router(router = navigation_tool_router, vis = "pub(super)")]
 impl AimerMcpServer {
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "get_call_hierarchy",
         description = "Return callers or callees for the function at a project-relative file position."
     )]
@@ -54,7 +53,6 @@ impl AimerMcpServer {
     }
 
     #[tool(
-        output_schema = mcp_result_schema(),
         name = "expand_macro",
         description = "Expand the Rust macro invocation at a project-relative file position."
     )]

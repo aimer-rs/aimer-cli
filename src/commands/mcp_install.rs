@@ -31,6 +31,63 @@ pub struct InstallReport {
     pub changed: bool,
 }
 
+/// Text format used when printing the MCP entry instead of installing it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigFormat {
+    /// The `mcpServers` object used by Claude Code and Cursor.
+    Json,
+    /// The `mcp_servers` table used by Codex.
+    Toml,
+}
+
+/// Render Aimer's stdio MCP entry without writing any agent configuration.
+pub fn render_config(format: ConfigFormat, scope: InstallScope) -> Result<String> {
+    let executable = std::env::current_exe()
+        .context("cannot determine the aimer executable")?
+        .canonicalize()
+        .context("cannot resolve the aimer executable")?;
+    render_config_at(format, scope, &executable)
+}
+
+fn render_config_at(
+    format: ConfigFormat,
+    scope: InstallScope,
+    executable: &Path,
+) -> Result<String> {
+    let args = scope_args(scope)?;
+    let command = executable.display().to_string();
+    match format {
+        ConfigFormat::Json => {
+            let document = json!({
+                "mcpServers": { "aimer": { "command": command, "args": args } }
+            });
+            serde_json::to_string_pretty(&document).context("serializing MCP configuration")
+        }
+        ConfigFormat::Toml => {
+            let mut server = TomlTable::new();
+            server.insert("command".to_string(), TomlValue::String(command));
+            server.insert(
+                "args".to_string(),
+                TomlValue::Array(args.into_iter().map(TomlValue::String).collect()),
+            );
+            let mut servers = TomlTable::new();
+            servers.insert("aimer".to_string(), TomlValue::Table(server));
+            let mut root = TomlTable::new();
+            root.insert("mcp_servers".to_string(), TomlValue::Table(servers));
+            toml::to_string_pretty(&TomlValue::Table(root))
+                .context("serializing MCP configuration")
+        }
+    }
+}
+
+fn scope_args(scope: InstallScope) -> Result<Vec<String>> {
+    let project = match scope {
+        InstallScope::Global => None,
+        InstallScope::Project(path) => Some(discover_project_root(&path)?),
+    };
+    Ok(command_args(project.as_deref()))
+}
+
 /// Install Aimer's stdio MCP entry in the requested agent configurations.
 pub fn install(agents: &[String], scope: InstallScope) -> Result<Vec<InstallReport>> {
     let home = dirs::home_dir().context("cannot determine the user home directory")?;
@@ -56,11 +113,7 @@ fn install_at(
         .iter()
         .map(|agent| Agent::parse(agent))
         .collect::<Result<Vec<_>>>()?;
-    let project = match scope {
-        InstallScope::Global => None,
-        InstallScope::Project(path) => Some(discover_project_root(&path)?),
-    };
-    let args = command_args(project.as_deref());
+    let args = scope_args(scope)?;
 
     let mut reports = Vec::with_capacity(agents.len());
     for agent in agents {
@@ -458,6 +511,48 @@ mod tests {
                 serde_json::json!(["mcp"])
             );
         }
+    }
+
+    #[test]
+    fn rendered_json_matches_the_installed_entry_without_writing() {
+        let executable = Path::new("/opt/aimer/bin/aimer");
+
+        let text = render_config_at(ConfigFormat::Json, InstallScope::Global, executable).unwrap();
+
+        let config: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            config["mcpServers"]["aimer"],
+            serde_json::json!({ "command": "/opt/aimer/bin/aimer", "args": ["mcp"] })
+        );
+    }
+
+    #[test]
+    fn rendered_toml_binds_the_canonical_project() {
+        let home = tempfile::tempdir().unwrap();
+        let project = home.path().join("demo");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+
+        let text = render_config_at(
+            ConfigFormat::Toml,
+            InstallScope::Project(project.clone()),
+            Path::new("/opt/aimer/bin/aimer"),
+        )
+        .unwrap();
+
+        let config: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(
+            config["mcp_servers"]["aimer"]["command"],
+            TomlValue::String("/opt/aimer/bin/aimer".to_string())
+        );
+        assert_eq!(
+            config["mcp_servers"]["aimer"]["args"],
+            TomlValue::Array(vec![
+                TomlValue::String("mcp".to_string()),
+                TomlValue::String("--project".to_string()),
+                TomlValue::String(project.canonicalize().unwrap().display().to_string()),
+            ])
+        );
     }
 
     #[test]

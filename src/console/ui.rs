@@ -326,6 +326,19 @@ pub fn render(
     }
 
     let (status_icon, status_text) = match state.status {
+        // Cargo is queued behind another process holding the build directory
+        // lock: say so instead of showing a compile percentage that is not
+        // moving.
+        _ if state.build_lock_wait.is_some() => {
+            let waited = state
+                .build_lock_wait
+                .as_ref()
+                .map_or(0, |(_, since)| since.elapsed().as_secs());
+            (
+                frames[frame_index],
+                format!("Blocking: waiting for file lock ({waited}s)"),
+            )
+        }
         Status::Locking => (frames[frame_index], "Locking dependencies...".to_string()),
         Status::Fetching(p) | Status::Downloading(p) => {
             (frames[frame_index], format!("Fetching {}%", p))
@@ -344,6 +357,7 @@ pub fn render(
         .split(chunks[1]);
 
     let status_color = match state.status {
+        _ if state.build_lock_wait.is_some() => Color::Yellow,
         Status::Locking => Color::LightBlue,
         Status::Fetching(_) | Status::Downloading(_) => Color::Blue,
         Status::Compiling(_) => Color::Yellow,
@@ -371,7 +385,7 @@ pub fn render(
                 .fg(Color::LightGreen)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("reload | "),
+        Span::raw("restart | "),
         Span::styled(
             "[Shift+Q] ",
             Style::default()
@@ -429,7 +443,7 @@ pub fn render(
          * "widgets " }), Span::raw("| "),
          * Span::styled("●",
          * Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-         * Span::raw(" hot-reload "), */
+         * Span::raw(" status "), */
     ]);
 
     let status_bar = Paragraph::new(status_line).style(Style::default());

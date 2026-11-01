@@ -34,6 +34,8 @@ pub(super) struct EditPreview {
     pub(super) source_validation: Option<Value>,
     pub(super) applicable: bool,
     pub(super) created_at: Instant,
+    /// Client that created the preview; only that client may apply it.
+    pub(super) owner: String,
 }
 
 pub(super) async fn workspace_edit_files(

@@ -1,7 +1,12 @@
+mod access;
 mod cargo_tools;
+mod compact;
 mod edit_tools;
+mod host;
 mod ide_tools;
 mod implementation_results;
+mod locations;
+mod markdown;
 mod navigation_tools;
 mod position;
 mod project_tools;
@@ -9,7 +14,13 @@ mod rust_response;
 mod session_helpers;
 mod symbol_metadata;
 mod tool_result;
+mod trim;
 
+pub use host::ServeMode;
+
+use access::{WorkspaceGate, access_class};
+use compact::{FULL_OUTPUT_SCOPE, compact, full_output_enabled};
+use markdown::{error_markdown, to_markdown};
 use position::*;
 use rust_response::*;
 use session_helpers::*;
@@ -21,7 +32,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, anyhow};
-use rmcp::handler::server::tool::ToolRouter;
+use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::service::RequestContext;
@@ -146,7 +157,7 @@ struct RustInspectFileArguments {
     /// Literal text or regex searches to run in the same file.
     #[serde(default)]
     searches: Vec<RustInspectFileSearchArguments>,
-    /// Output format: `json` (default) or numbered plain `text`.
+    /// Output format: numbered plain `text` (default) or structured `json`.
     #[serde(default)]
     format: Option<String>,
 }
@@ -365,6 +376,12 @@ struct AimerMcpServer {
     project_root: PathBuf,
     rust_analyzer: RustAnalyzerBridge,
     resource_capture_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Orders tool calls from every client sharing this workspace.
+    gate: WorkspaceGate,
+    /// Identity of the connected client; scopes previews and code actions.
+    client_id: String,
+    /// Whether this client asked for unabridged output.
+    full_output: bool,
 }
 
 impl AimerMcpServer {
@@ -381,7 +398,33 @@ impl AimerMcpServer {
     router = Self::tool_router(),
     instructions = "LSP calls may report indexing progress; wait for the result. Readiness failures are explicit."
 )]
-impl rmcp::ServerHandler for AimerMcpServer {}
+impl rmcp::ServerHandler for AimerMcpServer {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        let tool = request.name.to_string();
+        let permit = match self
+            .gate
+            .acquire(access_class(&tool), &tool, &self.client_id)
+            .await
+        {
+            Ok(permit) => permit,
+            Err(message) => return Ok(encode(&tool, Err(anyhow!(message))).into()),
+        };
+        let router = Self::tool_router();
+        let call = router.call(ToolCallContext::new(self, request, context));
+        let response = super::mcp_ra::CLIENT_ID
+            .scope(
+                self.client_id.clone(),
+                FULL_OUTPUT_SCOPE.scope(self.full_output, call),
+            )
+            .await;
+        drop(permit);
+        response
+    }
+}
 
 impl AimerMcpServer {
     async fn rust_position_request(
@@ -564,18 +607,46 @@ impl Drop for ResourceIntervalRestore {
 }
 
 /// Run the MCP stdio adapter for a selected Aimer session.
-pub fn execute(project: Option<PathBuf>, attach: Option<String>) -> anyhow::Result<()> {
+///
+/// In [`ServeMode::Shared`] (without `--attach`) this process becomes a thin
+/// proxy to the workspace host so several agents share one analysis engine;
+/// it falls back to serving standalone when no host can be reached.
+pub fn execute(
+    project: Option<PathBuf>,
+    attach: Option<String>,
+    full_output: bool,
+    mode: ServeMode,
+) -> anyhow::Result<()> {
+    compact::set_full_output(full_output);
     if project.is_some() && attach.is_some() {
         anyhow::bail!("--project and --attach are mutually exclusive");
+    }
+    if mode == ServeMode::Shared && attach.is_none() {
+        let root = match &project {
+            Some(project) => resolve_project_path(project.clone())?,
+            None => discover_project_root(&std::env::current_dir()?)?,
+        };
+        match host::run_proxy(&root, full_output_enabled()) {
+            Ok(true) => return Ok(()),
+            Ok(false) => tracing::debug!("no MCP workspace host; serving standalone"),
+            Err(error) => tracing::debug!(error = %error, "MCP proxy failed; serving standalone"),
+        }
     }
     let (client, project_root) = select_context(project, attach)?;
     let docs = DocsRsClient::new(project_root.clone())?;
     let rust_analyzer =
         RustAnalyzerBridge::new(project_root.clone(), crate::config::rust_analyzer_config());
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("starting MCP stdio runtime")?;
+    let host_mode = mode == ServeMode::Host;
+    let runtime = if host_mode {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+    } else {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    }
+    .context("starting MCP runtime")?;
     runtime.block_on(async move {
         let server = AimerMcpServer {
             client,
@@ -583,7 +654,13 @@ pub fn execute(project: Option<PathBuf>, attach: Option<String>) -> anyhow::Resu
             project_root,
             rust_analyzer,
             resource_capture_lock: Arc::new(tokio::sync::Mutex::new(())),
+            gate: WorkspaceGate::default(),
+            client_id: "stdio".to_owned(),
+            full_output: full_output_enabled(),
         };
+        if host_mode {
+            return host::serve_host(server).await;
+        }
         let service = server.serve(stdio()).await?;
         service.waiting().await?;
         Ok::<(), anyhow::Error>(())

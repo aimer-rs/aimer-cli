@@ -32,8 +32,6 @@ pub enum StageKind {
     Launch,
     /// The long-running application session.
     Application,
-    /// Rebuild and apply a hot reload.
-    HotReload,
     /// A stage kind introduced by a target or a future orchestration path.
     Custom(String),
     /// A free-form stage label supplied by an adapter.
@@ -58,7 +56,6 @@ impl StageKind {
             Self::Package => "Package",
             Self::Launch => "Launch",
             Self::Application => "Application",
-            Self::HotReload => "Hot reload",
             Self::Custom(label) | Self::Other(label) => label,
         }
     }
@@ -609,7 +606,7 @@ mod tests {
         let now = Instant::now();
         let mut book = StageBook::new();
         let parent = book.start(StageKind::Application, now);
-        let child = book.start(StageKind::HotReload, now + Duration::from_millis(1));
+        let child = book.start(StageKind::Launch, now + Duration::from_millis(1));
 
         assert_eq!(book.stage(child).unwrap().parent(), Some(parent));
         book.cancel(child, now + Duration::from_millis(2)).unwrap();

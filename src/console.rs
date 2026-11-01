@@ -1,3 +1,4 @@
+pub mod event_drain;
 pub mod hotkeys;
 pub mod inline;
 pub mod input;
@@ -5,6 +6,7 @@ pub mod inspector;
 pub mod log_history;
 pub mod stage;
 pub mod state;
+pub mod terminal_title;
 pub mod ui;
 
 use std::fs::File;
@@ -18,7 +20,7 @@ use std::time::{Duration, Instant, SystemTime};
 use self::inspector::InspectorServer;
 use crate::commands::run::Device;
 use crate::commands::run::pipeline::{self, RunContext, RunnerHandle};
-use crate::commands::run::utilities::{LogStyling, get_project_root};
+use crate::commands::run::utilities::get_project_root;
 use crate::session::{LogStream, SessionCommand, SessionHandle, SessionStatus};
 use crate::targets::Targets;
 use crate::tui::RawModeGuard;
@@ -110,14 +112,6 @@ pub(crate) fn observe_session_event(session: Option<&SessionHandle>, event: &Run
                 Status::Error => SessionStatus::Error,
             };
             session.set_status(status, None);
-        }
-        RunnerEvent::HotReload => {
-            session.push_log(
-                LogStream::System,
-                "info",
-                "file change detected; rebuilding".to_string(),
-                None,
-            );
         }
     }
 }
@@ -243,6 +237,9 @@ pub fn start(
     let mut last_tick = Instant::now();
     let progress_supported = terminal_supports_progress();
     let mut last_progress: Option<Status> = None;
+    let mut title_reporter = terminal_title::TitleReporter::new(
+        &crate::config::resolve_package_name(std::path::Path::new(".")),
+    );
 
     let mut current_child = spawn_runner(
         device.clone(),
@@ -253,39 +250,6 @@ pub fn start(
         release,
         session.clone(),
     );
-
-    // Hot-reload file watcher
-    // let _watcher = {
-    //     let tx_watch = tx.clone();
-    //     let mut debounce_last = AnimInstant::now();
-    //     let mut watcher =
-    //         notify::recommended_watcher(move |res: Result<NotifyEvent, notify::Error>| {
-    //             if let Ok(event) = res {
-    //                 use notify::EventKind;
-    //                 match event.kind {
-    //                     EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_) => {
-    //                         let dominated_by_rs = event
-    //                             .paths
-    //                             .iter()
-    //                             .any(|p| p.extension().is_some_and(|ext| ext == "rs"));
-    //                         if dominated_by_rs {
-    //                             let now = AnimInstant::now();
-    //                             if now.duration_since(debounce_last) > Duration::from_millis(500) {
-    //                                 debounce_last = now;
-    //                                 let _ = tx_watch.send(RunnerEvent::HotReload);
-    //                             }
-    //                         }
-    //                     }
-    //                     _ => {}
-    //                 }
-    //             }
-    //         })
-    //         .ok();
-    //     if let Some(ref mut w) = watcher {
-    //         let _ = w.watch(Path::new("."), RecursiveMode::Recursive);
-    //     }
-    //     watcher
-    // };
 
     let Ok(proj_root) = get_project_root(false) else {
         current_child.stop();
@@ -356,8 +320,9 @@ pub fn start(
         if stop_requested {
             break;
         }
-        // Process all pending events
-        while let Ok(event) = rx.try_recv() {
+        // Process pending events, but only for a bounded slice of time so a
+        // big burst of compile output cannot freeze the redraw and the keys.
+        let backlog = event_drain::drain_events(&rx, event_drain::EVENT_BUDGET, |event| {
             observe_session_event(session.as_ref(), &event);
             match event {
                 RunnerEvent::BuildLog(msg) => state.push_build_log(msg),
@@ -365,40 +330,10 @@ pub fn start(
                 RunnerEvent::AppLog(msg) => state.push_app_log(msg),
                 RunnerEvent::AppPanic(report) => state.push_app_panic(report),
                 RunnerEvent::StatusChange(s) => state.apply_status(s),
-                RunnerEvent::HotReload => {
-                    // Only trigger reload if app is currently running or idling
-                    match state.status {
-                        Status::Running | Status::Idling | Status::Error => {
-                            let _ = tx.send(RunnerEvent::AppLog(
-                                "[hot-reload] File change detected, rebuilding..."
-                                    .to_string()
-                                    .process_log(),
-                            ));
-                            if device.target == Targets::Web {
-                                state.clear_build();
-                                state.status = Status::Compiling(0);
-                                pipeline::spawn_wasm_pack(tx.clone(), release);
-                            } else {
-                                current_child.stop();
-                                state.clear_build();
-                                state.clear_app();
-                                state.status = Status::Compiling(0);
-                                current_child = spawn_runner(
-                                    device.clone(),
-                                    pkg_name.clone(),
-                                    tx.clone(),
-                                    inspector_handle.address,
-                                    inspector_handle.port,
-                                    release,
-                                    session.clone(),
-                                );
-                            }
-                        }
-                        _ => {} // Don't reload while already compiling/building
-                    }
-                }
             }
-        }
+        });
+
+        title_reporter.update(&state.status);
 
         // Update the terminal progress bar only when the status actually changed,
         // so we don't spam the escape on every frame.
@@ -425,9 +360,14 @@ pub fn start(
             );
         })?;
 
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
+        // Do not sleep waiting for input while events are still queued.
+        let timeout = if backlog {
+            Duration::ZERO
+        } else {
+            tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0))
+        };
 
         // Handle everything the terminal has queued, then redraw once. Reading
         // a single event per frame lets the input backlog outgrow the tick on a
@@ -851,23 +791,6 @@ pub fn start_no_tui(
                 Status::Locking => eprintln!("[status] Locking..."),
                 Status::Idling => {}
             },
-            RunnerEvent::HotReload => {
-                eprintln!("[hot-reload] File change detected, rebuilding...");
-                if device.target == Targets::Web {
-                    pipeline::spawn_wasm_pack(tx.clone(), release);
-                } else {
-                    current_child.stop();
-                    current_child = spawn_runner(
-                        device.clone(),
-                        pkg_name.clone(),
-                        tx.clone(),
-                        inspector_handle.address,
-                        inspector_handle.port,
-                        release,
-                        session.clone(),
-                    );
-                }
-            }
         }
     }
 
