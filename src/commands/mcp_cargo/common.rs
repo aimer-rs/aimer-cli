@@ -26,7 +26,7 @@ pub(super) fn find_lockfile(root: &Path) -> Option<PathBuf> {
         }
     }
 }
-pub(super) fn bounded_text(bytes: &[u8]) -> (String, bool) {
+pub fn bounded_text(bytes: &[u8]) -> (String, bool) {
     let truncated = bytes.len() > MAX_TOOL_OUTPUT_BYTES;
     let bytes = &bytes[..bytes.len().min(MAX_TOOL_OUTPUT_BYTES)];
     (String::from_utf8_lossy(bytes).into_owned(), truncated)

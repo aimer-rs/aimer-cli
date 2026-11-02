@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::*;
 
-fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
     let map: HashMap<String, String> = pairs
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -57,7 +57,8 @@ fn an_empty_variable_counts_as_unset() {
 
 #[test]
 fn path_is_searched_in_order_by_every_file_name() {
-    let env = env_of(&[("PATH", "/a:/b")]);
+    let search = std::env::join_paths(["/a", "/b"]).unwrap();
+    let env = env_of(&[("PATH", search.to_str().unwrap())]);
 
     let first = locate(&spec(), &env, &|p| {
         p == Path::new("/a/mytool.exe") || p == Path::new("/b/mytool")

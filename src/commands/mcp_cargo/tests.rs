@@ -1,5 +1,7 @@
+use crate::commands::mcp_cargo::{common::MAX_TOOL_OUTPUT_BYTES, manifest::apply_manifest_operation};
+
 use super::{
-    ManifestOperation, ManifestOperationAction, apply_manifest_operation, project_metadata_value,
+    ManifestOperation, ManifestOperationAction, project_metadata_value,
     resolve_manifest,
 };
 use serde_json::json;
@@ -19,6 +21,7 @@ fn generic_manifest_edits_preserve_comments_and_replace_values() {
             value: Some(json!({ "version": "2", "features": ["derive"] })),
         },
     )
+
     .unwrap();
     let source = document.to_string();
     assert!(source.contains("# keep this comment"));
@@ -115,9 +118,9 @@ fn metadata_projection_bounds_package_and_dependency_graph_lists() {
 
 #[test]
 fn cargo_output_is_bounded_and_reports_truncation() {
-    let output = vec![b'x'; super::MAX_TOOL_OUTPUT_BYTES + 10];
+    let output = vec![b'x'; MAX_TOOL_OUTPUT_BYTES + 10];
     let (text, truncated) = super::bounded_text(&output);
-    assert_eq!(text.len(), super::MAX_TOOL_OUTPUT_BYTES);
+    assert_eq!(text.len(), MAX_TOOL_OUTPUT_BYTES);
     assert!(truncated);
 }
 

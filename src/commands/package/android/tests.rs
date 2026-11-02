@@ -36,11 +36,20 @@ fn plan() -> AndroidSigningPlan {
     resolve(Some(&meta()), &[PASSWORD], "1.2.3").unwrap()
 }
 
+/// The keystore of `meta()` under the `/proj` root, joined the way the OS
+/// joins paths (a backslash is inserted on Windows).
+fn project_keystore() -> String {
+    Path::new("/proj")
+        .join("keys/upload.jks")
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[test]
 fn the_manifest_settings_are_resolved_against_the_project_root() {
     let plan = plan();
 
-    assert_eq!(plan.keystore, "/proj/keys/upload.jks");
+    assert_eq!(plan.keystore, project_keystore());
     assert_eq!(plan.key_alias, "upload");
     assert_eq!(plan.keystore_password, "storepass");
     assert_eq!(plan.version_name.as_deref(), Some("1.2.3"));
@@ -169,20 +178,23 @@ fn the_manifest_version_code_is_used_and_the_environment_wins() {
 fn a_missing_keystore_fails_the_preflight() {
     let err = plan().preflight(None).unwrap_err().to_string();
 
-    assert!(err.contains("/proj/keys/upload.jks"), "{err}");
+    assert!(err.contains(&project_keystore()), "{err}");
 }
 
 #[test]
 fn keytool_checks_the_alias_with_the_password_from_the_environment() {
     let cmd = plan().keytool_command(Some("/jdk"));
 
-    assert_eq!(cmd.get_program(), "/jdk/bin/keytool");
+    assert_eq!(
+        cmd.get_program(),
+        Path::new("/jdk").join("bin/keytool").as_os_str()
+    );
     assert_eq!(
         args_of(&cmd),
         [
             "-list",
             "-keystore",
-            "/proj/keys/upload.jks",
+            project_keystore().as_str(),
             "-alias",
             "upload",
             "-storepass:env",
@@ -243,7 +255,7 @@ fn the_signing_environment_reaches_gradle_but_not_the_arguments() {
         .get_envs()
         .filter_map(|(k, v)| Some((k.to_string_lossy().into(), v?.to_string_lossy().into())))
         .collect();
-    assert_eq!(env[ENV_KEYSTORE], "/proj/keys/upload.jks");
+    assert_eq!(env[ENV_KEYSTORE], project_keystore());
     assert_eq!(env[ENV_KEY_ALIAS], "upload");
     assert_eq!(env[ENV_KEYSTORE_PASSWORD], "storepass");
     assert_eq!(env[ENV_KEY_PASSWORD], "storepass");

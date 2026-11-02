@@ -30,7 +30,7 @@ pub struct AndroidSigningMeta {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::AimerManifest;
+    use crate::AimerManifest;
 
     #[test]
     fn the_android_tables_are_read_from_the_manifest() {

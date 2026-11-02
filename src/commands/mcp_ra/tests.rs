@@ -1,5 +1,7 @@
+use crate::commands::mcp_ra::document_search::simple_glob;
+
 use super::{
-    RustAnalyzerBridge, flycheck_result_json, normalize_result, position_from_source, simple_glob,
+    RustAnalyzerBridge, flycheck_result_json, normalize_result, position_from_source,
     source_offset, unified_diff, workspace_edit_files,
 };
 use serde_json::json;

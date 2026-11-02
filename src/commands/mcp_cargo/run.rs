@@ -588,7 +588,7 @@ pub async fn run_clippy(
 
 /// Remove rustc warning diagnostics from Cargo's JSON output while retaining
 /// readable diagnostics and test-process output for the MCP result.
-pub(super) fn normalize_cargo_output(stdout: &[u8], stderr: &[u8]) -> (Vec<u8>, Vec<u8>, usize) {
+pub fn normalize_cargo_output(stdout: &[u8], stderr: &[u8]) -> (Vec<u8>, Vec<u8>, usize) {
     normalize_cargo_output_with_build_warning_policy(stdout, stderr, true)
 }
 
@@ -699,7 +699,7 @@ pub(super) fn filter_cargo_progress_lines(stderr: &[u8]) -> (String, usize) {
     (visible, filtered_count)
 }
 
-pub(super) fn validate_cargo_arguments(
+pub fn validate_cargo_arguments(
     is_test: bool,
     arguments: &CargoRunArguments,
 ) -> anyhow::Result<()> {

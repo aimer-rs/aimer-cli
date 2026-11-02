@@ -387,7 +387,8 @@ fn the_assets_go_into_the_app_inside_the_archive() {
         .notes()
         .into_iter()
         .find(|n| n.starts_with("Copying assets into"))
-        .unwrap();
+        .unwrap()
+        .replace('\\', "/");
     assert!(
         note.ends_with("My App.xcarchive/Products/Applications/My App.app"),
         "{note}"

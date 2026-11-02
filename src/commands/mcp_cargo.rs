@@ -17,7 +17,7 @@ pub use run::{CargoRunArguments, CargoRunToolArguments, run_cargo, run_cargo_bin
 pub(super) use common::bounded_text;
 #[cfg(test)]
 pub(super) use manifest::{
-    ManifestOperation, ManifestOperationAction, apply_manifest_operation, resolve_manifest,
+    ManifestOperation, ManifestOperationAction, resolve_manifest,
 };
 #[cfg(test)]
 pub(super) use metadata::project_metadata_value;

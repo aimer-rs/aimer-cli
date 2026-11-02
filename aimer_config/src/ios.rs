@@ -32,7 +32,7 @@ pub struct IosSigningMeta {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::AimerManifest;
+    use crate::AimerManifest;
 
     #[test]
     fn signing_table_is_read_from_the_manifest() {

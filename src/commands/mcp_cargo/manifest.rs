@@ -124,7 +124,7 @@ pub struct ManifestCandidate {
     pub applicable: bool,
 }
 
-pub(super) fn resolve_manifest(root: &Path, requested: Option<&str>) -> anyhow::Result<PathBuf> {
+pub fn resolve_manifest(root: &Path, requested: Option<&str>) -> anyhow::Result<PathBuf> {
     let root = root
         .canonicalize()
         .context("resolving selected Rust project")?;

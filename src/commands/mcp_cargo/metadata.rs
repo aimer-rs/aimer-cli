@@ -73,7 +73,7 @@ pub async fn read_project_metadata_with_detail(
     })
 }
 
-pub(super) fn project_metadata_value(root: &Path, metadata: &Value) -> Value {
+pub fn project_metadata_value(root: &Path, metadata: &Value) -> Value {
     let packages = metadata
         .get("packages")
         .and_then(Value::as_array)
