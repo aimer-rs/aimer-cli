@@ -90,6 +90,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 sha2.workspace = true
 sha1.workspace = true
+semver.workspace = true
 hex.workspace = true
 syn.workspace = true
 quote.workspace = true
@@ -158,6 +159,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tempfile = "3.27.0"
 sha2 = "0.11.0"
 sha1 = "0.10.7"
+semver = "1"
 hex = "0.4.3"
 ring = "0.17.14"
 subtle = "2.6.1"

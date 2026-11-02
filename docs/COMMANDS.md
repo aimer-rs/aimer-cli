@@ -10,6 +10,7 @@
 - [`aimer package`](#aimer-package)
 - [`aimer doctor`](#aimer-doctor)
 - [`aimer components`](#aimer-components)
+- [`aimer update`](#aimer-update)
 - [`aimer clean`](#aimer-clean)
 - [`aimer migrate`](#aimer-migrate)
 - [`aimer completions`](#aimer-completions)
@@ -498,6 +499,44 @@ suggests the installed ones.
 
 - Removing a component that is not installed is a no-op; an unknown component name is an error.
 - Only `ndk` accepts a `@version`.
+
+---
+
+## `aimer update`
+
+Updates the `aimer` binary itself to the latest release published at
+<https://github.com/aimer-rs/aimer-cli/releases>.
+
+```bash
+aimer update                 # install the latest release
+aimer update --check         # only report whether a newer release exists
+aimer update --to 0.9.1      # install a specific release (a downgrade is allowed)
+aimer update --force         # reinstall even if the version is already installed
+```
+
+| Flag               | Description                                                   |
+| ------------------ | ------------------------------------------------------------- |
+| `--check`          | Report the latest version and exit without installing         |
+| `--to <VERSION>`   | Install this release instead of the latest one (`v` is optional) |
+| `--force`          | Install even when this version is already installed           |
+
+How it works:
+
+1. It asks the GitHub API for the latest release (or the one named with `--to`) and compares its version with the
+   running one. Nothing happens when you are already up to date.
+2. It downloads `aimer-<version>-<target>.tar.gz` (`.zip` on Windows) for your OS and CPU. Prebuilt targets are macOS
+   on Apple silicon, Linux (`x86_64`, `aarch64`) and Windows (`x86_64`, `aarch64`).
+3. The download is checked against the SHA-256 the release publishes (the `.sha256` file, or GitHub's digest). A
+   mismatch aborts the update.
+4. The archive is unpacked with the system `tar`, and the new binary is run with `--version` to make sure it starts.
+5. Only then is the running binary replaced. On Windows the old file is first renamed to `aimer.exe.old`, because a
+   running executable cannot be overwritten.
+
+Notes:
+
+- A binary built by cargo in a `target/debug` or `target/release` directory is never overwritten; rebuild it instead.
+- If `aimer` lives in a folder you cannot write to, the error says so; rerun with the rights needed to modify it.
+- Set `GITHUB_TOKEN` (or `GH_TOKEN`) if GitHub's anonymous rate limit stops the request.
 
 ---
 

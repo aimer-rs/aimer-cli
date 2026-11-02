@@ -26,4 +26,5 @@ mod project_selection;
 pub mod run;
 pub mod sessions;
 pub mod skill_install;
+pub mod update;
 pub mod version;

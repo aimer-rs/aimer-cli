@@ -277,6 +277,21 @@ enum Commands {
         #[command(subcommand)]
         action: Option<ComponentsAction>,
     },
+
+    /// Update aimer to the latest release from GitHub
+    Update {
+        /// Only check whether a newer release exists
+        #[arg(long)]
+        check: bool,
+
+        /// Install this release (for example `0.9.1`) instead of the latest
+        #[arg(long = "to", value_name = "VERSION")]
+        version: Option<String>,
+
+        /// Reinstall even when the version is already installed
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -499,6 +514,17 @@ fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Clean) => {
             commands::clean::execute()?;
+        }
+        Some(Commands::Update {
+            check,
+            version,
+            force,
+        }) => {
+            commands::update::execute(&commands::update::Options {
+                check: *check,
+                version: version.clone(),
+                force: *force,
+            })?;
         }
         Some(Commands::Components { action }) => {
             use commands::components::Action;
@@ -855,6 +881,32 @@ mod tests {
         let cli = Cli::try_parse_from(["aimer", "run", "--tui"]).unwrap();
 
         assert!(matches!(cli.command, Some(Commands::Run { tui: true, .. })));
+    }
+
+    #[test]
+    fn update_takes_check_target_version_and_force() {
+        let cli = Cli::try_parse_from(["aimer", "update"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Update {
+                check: false,
+                version: None,
+                force: false
+            })
+        ));
+        let cli =
+            Cli::try_parse_from(["aimer", "update", "--check", "--to", "0.9.1", "--force"])
+                .unwrap();
+        let Some(Commands::Update {
+            check,
+            version,
+            force,
+        }) = cli.command
+        else {
+            panic!("expected update");
+        };
+        assert!(check && force);
+        assert_eq!(version.as_deref(), Some("0.9.1"));
     }
 
     #[test]

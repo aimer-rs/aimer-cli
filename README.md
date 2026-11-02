@@ -38,6 +38,7 @@ restart, native compilation, asset bundling, and release packaging across deskto
   inspect runtime state, view logs, and control a running app directly.
 - **Environment diagnostics built in.** `aimer doctor` checks installed toolchains, platform SDKs, and Rust
   cross-compilation targets, with copy-paste remediation commands.
+- **Self-updating.** `aimer update` installs the latest release from GitHub, verifying its checksum first.
 
 ## Quick Start
 
