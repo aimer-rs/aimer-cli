@@ -83,7 +83,7 @@ fn dotnet_tools_install_into_the_managed_bin() {
             "tool",
             "install",
             "--tool-path",
-            "/home/me/.aimer/bin",
+            "/home/me/.aimer\\bin",
             "wix"
         ]
     );
