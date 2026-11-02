@@ -77,6 +77,7 @@ fn components_without_an_os_restriction_install_everywhere() {
 #[test]
 fn dotnet_tools_install_into_the_managed_bin() {
     let root = Path::new("/home/me/.aimer");
+    #[cfg(target_os = "windows")]
     assert_eq!(
         args(&dotnet_install_command(root, "wix")),
         [
@@ -84,6 +85,18 @@ fn dotnet_tools_install_into_the_managed_bin() {
             "install",
             "--tool-path",
             "/home/me/.aimer\\bin",
+            "wix"
+        ]
+    );
+
+    #[cfg(not(target_os = "windows"))]
+    assert_eq!(
+        args(&dotnet_install_command(root, "wix")),
+        [
+            "tool",
+            "install",
+            "--tool-path",
+            "/home/me/.aimer/bin",
             "wix"
         ]
     );
