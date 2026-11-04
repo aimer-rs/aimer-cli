@@ -394,7 +394,7 @@ impl AimerMcpServer {
 
 #[tool_handler(
     router = Self::tool_router(),
-    instructions = "LSP calls may report indexing progress; wait for the result. Readiness failures are explicit."
+    instructions = "Call these tools through your MCP client's native tool interface. Do not start `aimer mcp` yourself or write JSON-RPC or scripts to talk to it; if the tools are not available in your tool list, say so instead. LSP calls may report indexing progress; wait for the result. Readiness failures are explicit."
 )]
 impl rmcp::ServerHandler for AimerMcpServer {
     async fn call_tool(

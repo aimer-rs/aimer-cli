@@ -4,6 +4,7 @@ use crate::commands::run::cargo_message::ErrorReport;
 use crate::commands::run::panic_report::PanicReport;
 use crate::commands::run::utilities::{AppOutput, StyledLog};
 use crate::console::log_history::LogHistory;
+use crate::console::smooth::ProgressEase;
 use crate::resource_monitor::ResourceMonitorStatus;
 
 /// Maximum number of log lines retained per pane before old lines are dropped.
@@ -277,6 +278,9 @@ pub struct AppState {
     /// groups. Enabled by the full-screen TUI and left off in inline mode.
     collapse_repeated_app_logs: bool,
     pub status: Status,
+    /// The percentage currently shown for `status`, easing toward the reported
+    /// one so the display climbs instead of jumping.
+    progress_ease: ProgressEase,
     /// The cargo lock-wait notice and when the wait began, while the build is
     /// queued behind another cargo process. Cleared by the next status change.
     pub build_lock_wait: Option<(String, std::time::Instant)>,
@@ -322,6 +326,7 @@ impl AppState {
             show_log_source: false,
             collapse_repeated_app_logs,
             status: Status::Compiling(0),
+            progress_ease: ProgressEase::default(),
             build_lock_wait: None,
             pane: ConsoleType::App,
             resource_monitor: ResourceMonitorStatus::default(),
@@ -574,6 +579,18 @@ impl AppState {
             _ => {}
         }
         self.status = status;
+    }
+
+    /// The status as it should be displayed: its percentage eased toward the
+    /// reported one rather than jumping to it.
+    pub fn displayed_status(&self) -> Status {
+        self.progress_ease.displayed(&self.status)
+    }
+
+    /// Move the displayed percentage one step toward the reported one. Called
+    /// once per UI tick.
+    pub fn tick_progress(&mut self) {
+        self.progress_ease.tick(&self.status);
     }
 
     /// Cycle focus to the next pane.

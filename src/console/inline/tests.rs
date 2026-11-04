@@ -510,3 +510,23 @@ fn a_finished_stage_reports_its_duration_not_its_percentage() {
     assert!(summary.contains("ms") || summary.contains('s'), "{summary}");
     assert!(frame.contains("Compile") && frame.contains("1%"));
 }
+
+#[test]
+fn a_progress_jump_is_shown_gradually_on_the_running_stage() {
+    let mut session = InlineSession::new(&device());
+    session.apply_status(Status::Compiling(0));
+    session.tick_progress();
+    session.apply_status(Status::Compiling(60));
+
+    let frame = live_frame(&session);
+    assert!(frame.contains("0%") && !frame.contains("60%"), "{frame}");
+
+    session.tick_progress();
+    let frame = live_frame(&session);
+    assert!(!frame.contains(" 0%") && !frame.contains("60%"), "{frame}");
+
+    for _ in 0..70 {
+        session.tick_progress();
+    }
+    assert!(live_frame(&session).contains("60%"));
+}

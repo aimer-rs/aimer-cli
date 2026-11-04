@@ -188,6 +188,49 @@ fn app_state_apply_status_other_keeps_pane() {
 }
 
 #[test]
+fn the_displayed_percentage_climbs_toward_the_reported_one() {
+    let mut state = AppState::new();
+    state.apply_status(Status::Compiling(0));
+    state.tick_progress();
+    state.apply_status(Status::Compiling(60));
+
+    assert_eq!(state.status, Status::Compiling(60));
+    assert_eq!(state.displayed_status(), Status::Compiling(0));
+
+    state.tick_progress();
+    let Status::Compiling(first) = state.displayed_status() else {
+        panic!("still compiling");
+    };
+    assert!(first > 0 && first < 60, "{first}");
+
+    for _ in 0..70 {
+        state.tick_progress();
+    }
+    assert_eq!(state.displayed_status(), Status::Compiling(60));
+}
+
+#[test]
+fn a_status_without_a_percentage_is_displayed_unchanged() {
+    let mut state = AppState::new();
+    state.apply_status(Status::Compiling(10));
+    state.tick_progress();
+    state.apply_status(Status::Running);
+    state.tick_progress();
+
+    assert_eq!(state.displayed_status(), Status::Running);
+}
+
+#[test]
+fn a_restart_resets_the_displayed_percentage() {
+    let mut state = AppState::new();
+    state.apply_status(Status::Compiling(80));
+    state.tick_progress();
+    state.status = Status::Compiling(0);
+
+    assert_eq!(state.displayed_status(), Status::Compiling(0));
+}
+
+#[test]
 fn app_state_next_pane_cycles() {
     let mut state = AppState::new();
     state.next_pane();

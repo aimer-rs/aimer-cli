@@ -325,7 +325,7 @@ pub fn render(
         );
     }
 
-    let (status_icon, status_text) = match state.status {
+    let (status_icon, status_text) = match state.displayed_status() {
         // Cargo is queued behind another process holding the build directory
         // lock: say so instead of showing a compile percentage that is not
         // moving.

@@ -22,6 +22,7 @@ use crate::commands::run::Device;
 use crate::console::hotkeys::{ConsoleAction, ConsolePane, map_key_event};
 use crate::console::input;
 use crate::console::inspector::InspectorServer;
+use crate::console::smooth::{self, percent_of};
 use crate::console::stage::{StageBook, StageId, StageKind, StageProgress, StageStatus};
 use crate::console::state::{AppState, BUILD_LOCK_WAIT_PREFIX, RunnerEvent, Status, strip_ansi};
 use crate::session::{LogStream, SessionCommand, SessionHandle};
@@ -128,7 +129,7 @@ impl InlineSession {
             Status::Error | Status::Idling => return,
         };
         let id = self.ensure_stage(kind);
-        let progress = match status {
+        let progress = match self.state.displayed_status() {
             Status::Fetching(percent)
             | Status::Downloading(percent)
             | Status::Compiling(percent)
@@ -137,6 +138,19 @@ impl InlineSession {
             Status::Error | Status::Idling => None,
         };
         let _ = self.stages.set_progress(id, progress);
+    }
+
+    /// Move the shown percentage one step toward the reported one and show it
+    /// on the running stage. Called once per UI tick.
+    pub fn tick_progress(&mut self) {
+        self.state.tick_progress();
+        let shown = self.state.displayed_status();
+        let (Some(percent), Some(id)) = (percent_of(&shown), self.stages.active()) else {
+            return;
+        };
+        let _ = self
+            .stages
+            .set_progress(id, Some(StageProgress::new(u64::from(percent), Some(100))));
     }
 
     /// Reset retained output before a deliberate hot restart.
@@ -725,7 +739,9 @@ pub fn start(
     let mut session = InlineSession::new(&device);
     let mut renderer = InlineRenderer::new(stdout());
     let tick_rate = Duration::from_millis(100);
+    let progress_rate = smooth::STEP_INTERVAL;
     let mut last_tick = Instant::now();
+    let mut last_progress_tick = Instant::now();
     let mut quit = false;
     let mut title_reporter = super::terminal_title::TitleReporter::new(
         &crate::config::resolve_package_name(std::path::Path::new(".")),
@@ -792,7 +808,7 @@ pub fn start(
                 super::observe_session_event(control_session.as_ref(), &event);
                 session.apply_event(event);
             });
-        title_reporter.update(&session.state.status);
+        title_reporter.update(&session.state.displayed_status());
 
         let width = terminal::size()
             .map(|(width, _)| width as usize)
@@ -805,6 +821,11 @@ pub fn start(
             tick_rate
                 .checked_sub(last_tick.elapsed())
                 .unwrap_or(Duration::ZERO)
+                .min(
+                    progress_rate
+                        .checked_sub(last_progress_tick.elapsed())
+                        .unwrap_or(Duration::ZERO),
+                )
         };
         for event in input::drain_terminal(timeout)? {
             let Event::Key(key) = event else {
@@ -901,6 +922,11 @@ pub fn start(
         if last_tick.elapsed() >= tick_rate {
             session.frame = session.frame.wrapping_add(1);
             last_tick = Instant::now();
+        }
+
+        if last_progress_tick.elapsed() >= progress_rate {
+            session.tick_progress();
+            last_progress_tick = Instant::now();
         }
     }
 

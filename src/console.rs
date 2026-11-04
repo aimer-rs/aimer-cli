@@ -4,6 +4,7 @@ pub mod inline;
 pub mod input;
 pub mod inspector;
 pub mod log_history;
+pub mod smooth;
 pub mod stage;
 pub mod state;
 pub mod terminal_title;
@@ -237,7 +238,9 @@ pub fn start(
     let running_frame = ["▣", "▤", "▥", "▦", "▧", "▨", "▣", "▤", "▥", "▦"];
     let mut frame_index = 0;
     let tick_rate = Duration::from_millis(100);
+    let progress_rate = smooth::STEP_INTERVAL;
     let mut last_tick = Instant::now();
+    let mut last_progress_tick = Instant::now();
     let progress_supported = terminal_supports_progress();
     let mut last_progress: Option<Status> = None;
     let mut title_reporter = terminal_title::TitleReporter::new(
@@ -336,13 +339,14 @@ pub fn start(
             }
         });
 
-        title_reporter.update(&state.status);
+        let displayed_status = state.displayed_status();
+        title_reporter.update(&displayed_status);
 
-        // Update the terminal progress bar only when the status actually changed,
-        // so we don't spam the escape on every frame.
-        if progress_supported && last_progress.as_ref() != Some(&state.status) {
-            emit_terminal_progress(&state.status);
-            last_progress = Some(state.status.clone());
+        // Update the terminal progress bar only when the shown status actually
+        // changed, so we don't spam the escape on every frame.
+        if progress_supported && last_progress.as_ref() != Some(&displayed_status) {
+            emit_terminal_progress(&displayed_status);
+            last_progress = Some(displayed_status);
         }
 
         let inspector_state = inspector_handle.state.snapshot();
@@ -370,6 +374,11 @@ pub fn start(
             tick_rate
                 .checked_sub(last_tick.elapsed())
                 .unwrap_or_else(|| Duration::from_secs(0))
+                .min(
+                    progress_rate
+                        .checked_sub(last_progress_tick.elapsed())
+                        .unwrap_or_else(|| Duration::from_secs(0)),
+                )
         };
 
         // Handle everything the terminal has queued, then redraw once. Reading
@@ -654,6 +663,11 @@ pub fn start(
         if last_tick.elapsed() >= tick_rate {
             frame_index = (frame_index + 1) % frames.len();
             last_tick = Instant::now();
+        }
+
+        if last_progress_tick.elapsed() >= progress_rate {
+            state.tick_progress();
+            last_progress_tick = Instant::now();
         }
     }
 

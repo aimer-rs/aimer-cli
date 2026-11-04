@@ -593,6 +593,7 @@ impl EmbeddedRustAnalyzer {
             enable_auto_await: true,
             enable_private_editable: true,
             enable_term_search: true,
+            enable_turbofish: true,
             term_search_fuel: 400,
             full_function_signatures: true,
             callable: Some(CallableSnippets::FillArguments),
