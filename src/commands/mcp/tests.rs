@@ -147,3 +147,12 @@ fn symbol_search_order_is_repeatable_and_keeps_exact_matches_first() {
         serde_json::to_string(&reverse).unwrap()
     );
 }
+
+#[test]
+fn inspect_file_search_accepts_query_and_the_legacy_pattern_name() {
+    for key in ["query", "pattern"] {
+        let search: RustInspectFileSearchArguments =
+            serde_json::from_value(json!({ key: "TIMEOUT" })).unwrap();
+        assert_eq!(search.query, "TIMEOUT");
+    }
+}

@@ -165,7 +165,7 @@ impl AimerMcpServer {
             .searches
             .into_iter()
             .map(|search| InspectFilePattern {
-                pattern: search.pattern,
+                pattern: search.query,
                 regex: search.regex,
                 case_sensitive: search.case_sensitive.unwrap_or(true),
                 context_before: search.context_before.unwrap_or(0),

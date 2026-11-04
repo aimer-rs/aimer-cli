@@ -171,9 +171,11 @@ struct RustInspectFileRangeArguments {
 
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 struct RustInspectFileSearchArguments {
-    /// Literal text or a Rust regex pattern.
-    pattern: String,
-    /// Interpret the pattern as a regular expression.
+    /// Literal text or a Rust regex pattern, named like `search_text`'s `query`.
+    /// `pattern` is still accepted as an alias.
+    #[serde(alias = "pattern")]
+    query: String,
+    /// Interpret the query as a regular expression.
     #[serde(default)]
     regex: bool,
     /// Whether matching should be case-sensitive. Defaults to true.

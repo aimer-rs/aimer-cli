@@ -27,7 +27,8 @@ impl AimerMcpServer {
             self.rust_analyzer.allow_network(),
             arguments.detail,
         )
-        .await;
+        .await
+        .and_then(|value| metadata_failure(value, self.rust_analyzer.allow_network()));
         encode("get_project_metadata", result)
     }
 
@@ -151,5 +152,62 @@ impl AimerMcpServer {
         )
         .await;
         encode("check", result)
+    }
+}
+
+/// Turn a `status: unavailable` metadata result into a tool error, so agents
+/// see a failed call instead of a successful one carrying an error message.
+fn metadata_failure(value: Value, allow_network: bool) -> anyhow::Result<Value> {
+    if value.get("status").and_then(Value::as_str) != Some("unavailable") {
+        return Ok(value);
+    }
+    let message = value
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("cargo metadata failed")
+        .trim();
+    let exit = value
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .map(|code| format!(" (exit code {code})"))
+        .unwrap_or_default();
+    let hint = if !allow_network && message.contains("--offline") {
+        "\nCargo runs offline for Aimer MCP tools. Run `cargo fetch` in the project, or set `allow_network = true` under `[mcp.rust_analyzer]` in ~/.aimer/config.toml."
+    } else {
+        ""
+    };
+    Err(anyhow!("cargo metadata failed{exit}: {message}{hint}"))
+}
+
+#[cfg(test)]
+mod metadata_failure_tests {
+    use super::metadata_failure;
+    use serde_json::json;
+
+    #[test]
+    fn ready_metadata_passes_through() {
+        let value = json!({ "status": "ready", "workspace_root": "." });
+        assert_eq!(metadata_failure(value.clone(), false).unwrap(), value);
+    }
+
+    #[test]
+    fn unavailable_metadata_becomes_an_error_with_an_offline_hint() {
+        let value = json!({
+            "status": "unavailable",
+            "exit_code": 101,
+            "message": "error: failed to download `x`\n  attempting to make an HTTP request, but --offline was specified\n"
+        });
+        let message = format!("{:#}", metadata_failure(value, false).unwrap_err());
+        assert!(
+            message.starts_with("cargo metadata failed (exit code 101): error: failed to download")
+        );
+        assert!(message.contains("cargo fetch"));
+    }
+
+    #[test]
+    fn offline_hint_is_omitted_when_network_is_allowed() {
+        let value = json!({ "status": "unavailable", "message": "--offline was specified" });
+        let message = format!("{:#}", metadata_failure(value, true).unwrap_err());
+        assert!(!message.contains("cargo fetch"));
     }
 }
