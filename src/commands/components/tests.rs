@@ -100,6 +100,7 @@ fn dotnet_tools_install_into_the_managed_bin() {
             "wix"
         ]
     );
+     #[cfg(not(target_os = "windows"))]
     assert_eq!(
         args(&dotnet_uninstall_command(root, "wix")),
         [
@@ -107,6 +108,17 @@ fn dotnet_tools_install_into_the_managed_bin() {
             "uninstall",
             "--tool-path",
             "/home/me/.aimer/bin",
+            "wix"
+        ]
+    );
+    #[cfg(target_os = "windows")]
+    assert_eq!(
+        args(&dotnet_uninstall_command(root, "wix")),
+        [
+            "tool",
+            "uninstall",
+            "--tool-path",
+            "/home/me/.aimer\\bin",
             "wix"
         ]
     );
