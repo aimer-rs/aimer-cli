@@ -8,6 +8,7 @@ mod implementation_results;
 mod locations;
 mod markdown;
 mod navigation_tools;
+mod portable_schema;
 mod position;
 mod project_tools;
 mod rust_response;
@@ -384,11 +385,13 @@ struct AimerMcpServer {
 
 impl AimerMcpServer {
     fn tool_router() -> ToolRouter<Self> {
-        Self::project_tool_router()
-            + Self::ide_tool_router()
-            + Self::cargo_tool_router()
-            + Self::navigation_tool_router()
-            + Self::edit_tool_router()
+        portable_schema::portable_router(
+            Self::project_tool_router()
+                + Self::ide_tool_router()
+                + Self::cargo_tool_router()
+                + Self::navigation_tool_router()
+                + Self::edit_tool_router(),
+        )
     }
 }
 
