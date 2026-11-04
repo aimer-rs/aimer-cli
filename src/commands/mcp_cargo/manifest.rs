@@ -41,7 +41,21 @@ pub struct ManifestOperation {
     pub path: Vec<String>,
     /// TOML-compatible JSON value, required for `set` and omitted for `remove`.
     #[serde(default)]
+    #[schemars(schema_with = "toml_value_schema")]
     pub value: Option<Value>,
+}
+
+/// Declare the JSON shapes a TOML value can take instead of accepting any value.
+fn toml_value_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "anyOf": [
+            { "type": "string" },
+            { "type": "number" },
+            { "type": "boolean" },
+            { "type": "array" },
+            { "type": "object" }
+        ]
+    })
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
