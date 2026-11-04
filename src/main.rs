@@ -38,13 +38,20 @@ struct Cli {
 
 /// Initialise the tracing subscriber. Honours `RUST_LOG` if set, otherwise
 /// defaults to `warn` (or `debug` when `--verbose` is passed).
+///
+/// Logs go to stderr: stdout carries command output and, for `aimer mcp`, the
+/// JSON-RPC stream, which any log line would corrupt.
 fn init_logging(verbose: bool) {
     use tracing_subscriber::{EnvFilter, fmt};
 
     let default_level = if verbose { "debug" } else { "warn" };
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level));
-    let _ = fmt().with_env_filter(filter).with_target(false).try_init();
+    let _ = fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .with_target(false)
+        .try_init();
 }
 
 #[cfg(debug_assertions)]
