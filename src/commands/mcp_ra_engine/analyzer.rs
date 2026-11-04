@@ -112,8 +112,10 @@ impl EmbeddedRustAnalyzer {
 
     /// Apply changes to already indexed Rust files. Structural and manifest
     /// changes request a workspace reload so the crate graph stays coherent.
+    /// Reads and metadata-only events are ignored; see [`file_events`].
     pub(crate) fn poll_file_events(&mut self) -> anyhow::Result<bool> {
         let mut reload = false;
+        let mut updated = std::collections::BTreeSet::new();
         loop {
             let event = match self.events.try_recv() {
                 Ok(Ok(event)) => event,
@@ -124,34 +126,28 @@ impl EmbeddedRustAnalyzer {
                 }
                 Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
             };
-            let structural = matches!(event.kind, EventKind::Create(_) | EventKind::Remove(_));
             for path in event.paths {
-                if path.strip_prefix(&self.root).ok().is_some_and(|relative| {
-                    relative.components().any(|component| {
-                        matches!(component, std::path::Component::Normal(name) if name == "target" || name == ".git" || name == ".aimer")
-                    })
-                }) {
-                    continue;
-                }
-                if path
-                    .file_name()
-                    .is_some_and(|name| name == "Cargo.toml" || name == "build.rs")
-                {
-                    reload = true;
-                    continue;
-                }
-                if path.extension().is_some_and(|extension| extension == "rs") {
-                    if structural || !path.is_file() {
-                        reload = true;
-                    } else if let Ok(source) = std::fs::read_to_string(&path) {
-                        if self.update_indexed_file(&path, &source).is_err() {
-                            reload = true;
-                        }
+                match file_events::classify(&event.kind, &path, &self.root) {
+                    FileEventAction::Ignore => {}
+                    FileEventAction::Reload => reload = true,
+                    FileEventAction::UpdateSource => {
+                        updated.insert(path);
                     }
                 }
             }
         }
-        Ok(reload)
+        if reload {
+            return Ok(true);
+        }
+        // Each path is read once per poll, however many events it produced.
+        for path in updated {
+            if let Ok(source) = std::fs::read_to_string(&path)
+                && self.update_indexed_file(&path, &source).is_err()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(crate) fn update_document(&mut self, path: &Path, source: &str) -> anyhow::Result<()> {
@@ -172,7 +168,8 @@ impl EmbeddedRustAnalyzer {
     fn update_indexed_file(&mut self, path: &Path, source: &str) -> anyhow::Result<()> {
         let path = self.resolve_path(path)?;
         let vfs_path = VfsPath::new_real_path(path.to_string_lossy().into_owned());
-        self.vfs
+        let changed = self
+            .vfs
             .set_file_contents(vfs_path.clone(), Some(source.as_bytes().to_vec()));
         let (file_id, excluded) = self
             .vfs
@@ -180,6 +177,11 @@ impl EmbeddedRustAnalyzer {
             .ok_or_else(|| anyhow!("file disappeared from the Rust workspace"))?;
         if excluded == FileExcluded::Yes {
             bail!("Rust file '{}' is excluded from analysis", path.display());
+        }
+        if !changed {
+            // Identical text: applying it would still invalidate rust-analyzer's
+            // caches and force the next query to recompute them.
+            return Ok(());
         }
         let mut change = ChangeWithProcMacros::default();
         change.change_file(file_id, Some(source.to_owned()));
@@ -293,7 +295,10 @@ impl EmbeddedRustAnalyzer {
             .into_iter()
             .take(MAX_ENGINE_RESULTS)
             .map(|target| {
-                let (uri, range) = self.navigation_location(analysis, &target)?;
+                // Point at the symbol's name, as rust-analyzer's LSP server
+                // does, so the position can feed hover, references, or rename.
+                // The full range starts at leading doc comments and attributes.
+                let (uri, range) = self.navigation_selection(analysis, &target)?;
                 let mut item = json!({
                     "name": target.name.to_string(),
                     "kind": target.kind.map(symbol_kind_number).unwrap_or(13),

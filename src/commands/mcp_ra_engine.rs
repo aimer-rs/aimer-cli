@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
-use notify::{Event, EventKind, RecursiveMode, Watcher};
+use notify::{Event, RecursiveMode, Watcher};
 use ra_ap_hir::{ClosureStyle, PrefixKind};
 use ra_ap_ide::{
     Analysis, AnalysisHost, AssistConfig, AssistResolveStrategy, CallHierarchyConfig,
@@ -35,7 +35,10 @@ use tempfile::TempDir;
 include!(concat!(env!("OUT_DIR"), "/aimer_proc_macro_server.rs"));
 
 mod analyzer;
+mod file_events;
 mod positions;
+
+use file_events::FileEventAction;
 
 const MAX_ENGINE_RESULTS: usize = 200;
 const MAX_IMPLEMENTATION_RESULTS: usize = 5_000;
