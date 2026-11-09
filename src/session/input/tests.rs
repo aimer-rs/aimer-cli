@@ -184,7 +184,7 @@ fn the_session_attaches_under_its_own_name_and_keeps_one_connection() {
     session.send_input(json!({ "commands": ["move 3 4"] })).expect("second");
     let lines: Vec<String> = received.try_iter().collect();
     let hellos: Vec<&String> = lines.iter().filter(|l| l.starts_with("hello ")).collect();
-    assert_eq!(hellos, [&format!("hello {} aimer-cli", route.token)], "named, and said once");
+    assert_eq!(hellos, [&format!("hello {} aimer-cli role=launcher", route.token)], "named, and said once");
     assert_eq!(lines.iter().filter(|l| l.starts_with("move")).count(), 2);
 }
 
@@ -374,5 +374,5 @@ fn a_request_adds_no_lingering_agent_while_a_real_one_holds_the_app() {
     drop(lease);
     session.send_input(json!({ "commands": ["move 3 4"] })).expect("sent");
     let hello = next_line(&heard);
-    assert!(hello.1.contains(" cli"), "with nobody holding the app, a one-shot request still counts: {hello:?}");
+    assert!(hello.1.contains("closed"), "with nobody holding the app, a one-shot request still counts: {hello:?}");
 }

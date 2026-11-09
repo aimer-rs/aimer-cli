@@ -218,8 +218,8 @@ mod tests {
 
     #[test]
     fn keys_and_text_and_raw_lines_pass_through() {
-        assert_eq!(lines(&["key", "ctrl+a"]), ["key press ctrl a", "key release ctrl a"]);
-        assert_eq!(lines(&["type", "hello world"]), ["text hello world"]);
+        assert_eq!(lines(&["key", "ctrl+a"]), ["key press ctrl other:a", "key release ctrl other:a"]);
+        assert_eq!(lines(&["type", "hello world"]), ["typing - hello world"]);
         assert_eq!(lines(&["send", "back invoke", "link aimer://x"]), ["back invoke", "link aimer://x"]);
     }
 
