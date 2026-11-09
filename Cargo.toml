@@ -118,10 +118,11 @@ aimer_config = { path = "aimer_config" }
 
 # The client side of `aimer_prendre`: it sends synthetic input to a running app.
 # It has no dependencies of its own with only the `client` feature.
-aimer_prendre = { path = "../aimer/host/prendre", default-features = false, features = ["client"] }
+# aimer_prendre = { path = "../aimer/host/prendre", default-features = false, features = ["client"] }
+
 # Pin a commit instead once the crate is pushed; the path needs the aimer
 # repository checked out next to this one.
-# aimer_prendre = { git = "ssh://git@github.com/aimer-rs/aimer.git", rev = "REPLACE_WITH_COMMIT", default-features = false, features = ["client"] }
+aimer_prendre = { git = "https://github.com/aimer-rs/aimer.git", package = "aimer_prendre" ,rev = "616394c865c4010e8840e15e15b28fff32fca18b", default-features = false, features = ["client"] }
 
 # Crates.io dependencies
 

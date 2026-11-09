@@ -89,6 +89,7 @@ dependencies = [
 [[package]]
 name = "aimer_prendre"
 version = "0.1.0"
+source = "git+https://github.com/aimer-rs/aimer.git?rev=616394c865c4010e8840e15e15b28fff32fca18b#616394c865c4010e8840e15e15b28fff32fca18b"
 
 [[package]]
 name = "allocator-api2"
