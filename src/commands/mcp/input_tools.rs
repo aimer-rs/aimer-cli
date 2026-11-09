@@ -198,7 +198,7 @@ impl AimerMcpServer {
         description = "Take a screenshot of the running app's window, as the app itself drew it: only the app, nothing else on the screen. Returns the picture and its size. By default a pixel in the picture is a logical pixel, so its coordinates can be passed straight to the click, scroll and drag tools; if max_width makes it smaller, the text says what to divide by. Use it to see the result of an action before the next one."
     )]
     fn screenshot(&self, Parameters(a): Parameters<ScreenshotArguments>) -> CallToolResult {
-        let reply = self.request_live("screenshot", json!({ "width": a.max_width, "jpeg": a.jpeg_quality }));
+        let reply = self.request_app("screenshot", json!({ "width": a.max_width, "jpeg": a.jpeg_quality }));
         picture_result(reply)
     }
 
@@ -207,7 +207,7 @@ impl AimerMcpServer {
         description = "Send raw aimer_prendre protocol lines to the app, in order, for events the other input tools do not cover: `back start|progress P|invoke|cancel`, `link URL`, `menu undo|redo|cut|copy|paste|select-all`, `file-hover PATH`, `file-hover-cancel`, `file-drop PATH`, `preedit RANGE TEXT`, `soft-backspace`, `touch ...`, `pinch`, `rotate`, `pan`, `quit`. The whole request is checked before anything is sent."
     )]
     fn send_input(&self, Parameters(a): Parameters<RawInputArguments>) -> CallToolResult {
-        encode("send_input", self.request_live("input", json!({ "commands": a.commands })))
+        encode("send_input", self.request_app("input", json!({ "commands": a.commands })))
     }
 }
 
@@ -216,8 +216,30 @@ impl AimerMcpServer {
     fn drive(&self, tool: &str, built: Result<Vec<Command>, ActionError>) -> CallToolResult {
         let result = built
             .map_err(|error| anyhow!("{error}"))
-            .and_then(|commands| self.request_live("input", json!({ "commands": wire_lines(&commands) })));
+            .and_then(|commands| self.request_app("input", json!({ "commands": wire_lines(&commands) })));
         encode(tool, result)
+    }
+
+    /// A request to the session that acts on its app, which is also the moment this
+    /// agent becomes one that is remote-controlling it.
+    ///
+    /// The lease is taken once and kept until the server ends, so the app shows
+    /// the agent is there between commands as well as during them. It is best
+    /// effort: an agent that cannot say so still gets its request answered.
+    fn request_app(&self, operation: &str, payload: Value) -> anyhow::Result<Value> {
+        self.hold_remote();
+        self.request_live(operation, payload)
+    }
+
+    fn hold_remote(&self) {
+        let Some(client) = self.client.as_ref() else { return };
+        let mut lease = self.remote.lease.lock().expect("remote lease mutex poisoned");
+        if lease.is_none() {
+            match client.open_lease(&format!("mcp:{}", self.client_id)) {
+                Ok(held) => *lease = Some(held),
+                Err(error) => tracing::debug!(%error, "could not tell the session an agent is remote"),
+            }
+        }
     }
 }
 

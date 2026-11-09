@@ -6,8 +6,9 @@
 //! session, and the session talks to the app.
 
 use std::net::IpAddr;
+use std::time::{Duration, Instant};
 
-use aimer_prendre::{Client, Command, Endpoint, env};
+use aimer_prendre::{Client, Command, Endpoint, Role, env};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -62,9 +63,43 @@ impl InputRoute {
     }
 }
 
-/// What the app is told this session is called. It shows it in its badge for as
-/// long as the connection under that name is open.
+/// What the app is told the session's own connection is called.
+///
+/// That connection stays open for the whole run, so it says the app can be driven
+/// and nothing about whether anyone is driving it: it is the launcher's, and the
+/// app is told so. An agent that controls the app has a lease of its own.
 const ATTACH_NAME: &str = "aimer-cli";
+
+/// What a one-shot request — `aimer input`, `aimer screenshot` — is called to the
+/// app while it counts as an agent.
+const ONE_SHOT_NAME: &str = "cli";
+
+/// How long a one-shot request goes on counting as an agent after it ends. It has
+/// no process that stays, as an agent's MCP server does, so it is there for a
+/// moment after each command, and a run of them is there throughout.
+#[cfg(not(test))]
+const LINGER: Duration = Duration::from_secs(4);
+#[cfg(test)]
+const LINGER: Duration = Duration::from_millis(300);
+
+/// How often the lingering connections are looked at to see whether one is over.
+const REAP_EVERY: Duration = Duration::from_millis(100);
+
+/// The most agents that may hold the app at once; a runaway client is refused
+/// beyond it.
+const MAX_LEASES: usize = 16;
+
+/// One agent that is remote-controlling the app, and the connection that says so.
+struct Lease {
+    id: u64,
+    name: String,
+    /// The agent's own connection to the app, if the app is reachable. Held so
+    /// that letting go of the lease disconnects it.
+    client: Option<Client>,
+    /// When it ends on its own, for a one-shot request. An agent's lease has none:
+    /// it lasts as long as the agent's process does.
+    expires: Option<Instant>,
+}
 
 /// What a session knows about driving its app.
 #[derive(Default)]
@@ -75,6 +110,25 @@ pub(super) struct InputState {
     /// the app says it is being driven from the moment it announces itself and
     /// not only while a request is in flight; requests reuse it.
     client: Option<Client>,
+    /// Whether the app has been reached since it announced itself: a connection
+    /// was made, or a request got through. Unlike `client`, which is out of its
+    /// place while a request is using it, this does not flicker.
+    reached: bool,
+    /// The agents controlling the app. They outlive the app they were connected
+    /// to: a relaunch reconnects them.
+    leases: Vec<Lease>,
+    next_lease: u64,
+    /// Whether a thread is watching for one-shot requests to end.
+    reaping: bool,
+}
+
+impl InputState {
+    /// Whether the app announced itself and has been reached, so input tools can
+    /// be offered. A launched app that has not announced, one that cannot be
+    /// reached, and a session whose target cannot be driven are all not.
+    pub(super) fn is_connected(&self) -> bool {
+        self.endpoint.is_some() && self.reached
+    }
 }
 
 #[derive(Deserialize)]
@@ -104,9 +158,13 @@ impl SessionHandle {
         let mut input = self.shared.input.lock().expect("input mutex poisoned");
         input.route = Some(route);
         input.endpoint = None;
+        input.reached = false;
         // Dropping the connection tells the old app, if it is still there, that
-        // this session has let go.
+        // this session has let go. The agents stay: they reconnect to the new one.
         input.client = None;
+        for lease in &mut input.leases {
+            lease.client = None;
+        }
     }
 
     /// Looks for the app's announcement in one of its log lines.
@@ -121,6 +179,7 @@ impl SessionHandle {
             };
             input.endpoint = Some(endpoint.clone());
             input.client = None;
+            input.reached = false;
             endpoint
         };
         let session = self.clone();
@@ -132,14 +191,114 @@ impl SessionHandle {
     /// Opens the named connection to `endpoint` and keeps it, unless the app
     /// has been relaunched elsewhere in the meantime.
     fn attach(&self, endpoint: &Endpoint) {
-        let Ok(client) = Client::connect_as(endpoint, ATTACH_NAME) else {
+        let Ok(client) = Client::connect_with(endpoint, ATTACH_NAME, Role::Launcher) else {
             // A request connects for itself and says why it could not.
             return;
         };
-        let mut input = self.shared.input.lock().expect("input mutex poisoned");
-        if input.endpoint.as_ref() == Some(endpoint) && input.client.is_none() {
-            input.client = Some(client);
+        {
+            let mut input = self.shared.input.lock().expect("input mutex poisoned");
+            if input.endpoint.as_ref() == Some(endpoint) && input.client.is_none() {
+                input.client = Some(client);
+                input.reached = true;
+            }
         }
+        // Whoever was controlling the app before it announced itself is now in reach.
+        self.connect_leases();
+    }
+
+    /// Says the agent called `name` is remote-controlling the app, until the
+    /// returned lease is dropped.
+    ///
+    /// The app is told over a connection of its own, in the agent role, so it
+    /// shows the agent is there for as long as the lease is held, busy or idle.
+    /// A lease taken before the app is reachable connects when it is.
+    pub(crate) fn open_lease(&self, name: &str) -> LeaseGuard {
+        let id = {
+            let mut input = self.shared.input.lock().expect("input mutex poisoned");
+            let id = input.next_lease;
+            input.next_lease += 1;
+            if input.leases.iter().filter(|lease| lease.expires.is_none()).count() < MAX_LEASES {
+                input.leases.push(Lease { id, name: lease_name(name), client: None, expires: None });
+            }
+            id
+        };
+        self.connect_leases();
+        LeaseGuard { session: self.clone(), id }
+    }
+
+    /// Counts a one-shot request as an agent for the next [`LINGER`], unless an
+    /// agent that stays is already there.
+    ///
+    /// An agent's own commands arrive as requests too, and it has a lease that says
+    /// it is there for as long as it is: counting them as well would leave a
+    /// short-lived second agent behind, which keeps the app looking driven for a few
+    /// seconds after the real one has gone.
+    fn linger(&self) {
+        {
+            let mut input = self.shared.input.lock().expect("input mutex poisoned");
+            if input.leases.iter().any(|lease| lease.expires.is_none()) {
+                return;
+            }
+            let until = Some(Instant::now() + LINGER);
+            match input.leases.iter_mut().find(|lease| lease.expires.is_some()) {
+                Some(lease) => lease.expires = until,
+                None => {
+                    let id = input.next_lease;
+                    input.next_lease += 1;
+                    input.leases.push(Lease { id, name: ONE_SHOT_NAME.to_owned(), client: None, expires: until });
+                }
+            }
+            if !input.reaping {
+                input.reaping = true;
+                let session = self.clone();
+                let _ = std::thread::Builder::new().name("aimer-input-linger".into()).spawn(move || session.reap());
+            }
+        }
+        self.connect_leases();
+    }
+
+    /// Ends one-shot requests as their time runs out, and stops when none is left.
+    fn reap(&self) {
+        loop {
+            std::thread::sleep(REAP_EVERY);
+            let mut input = self.shared.input.lock().expect("input mutex poisoned");
+            let now = Instant::now();
+            input.leases.retain(|lease| lease.expires.is_none_or(|until| until > now));
+            if input.leases.iter().all(|lease| lease.expires.is_none()) {
+                input.reaping = false;
+                return;
+            }
+        }
+    }
+
+    /// Opens the connection of every lease that has none and can have one.
+    fn connect_leases(&self) {
+        let (endpoint, waiting) = {
+            let input = self.shared.input.lock().expect("input mutex poisoned");
+            let Some(endpoint) = input.endpoint.clone() else { return };
+            let waiting: Vec<(u64, String)> = input
+                .leases
+                .iter()
+                .filter(|lease| lease.client.is_none())
+                .map(|lease| (lease.id, lease.name.clone()))
+                .collect();
+            (endpoint, waiting)
+        };
+        for (id, name) in waiting {
+            // Reaching a phone can take a while, so no lock is held while it does.
+            let Ok(client) = Client::connect_with(&endpoint, &name, Role::Agent) else { continue };
+            let mut input = self.shared.input.lock().expect("input mutex poisoned");
+            // Still wanted, still the same app, and not already connected meanwhile.
+            if input.endpoint.as_ref() == Some(&endpoint)
+                && let Some(lease) = input.leases.iter_mut().find(|lease| lease.id == id && lease.client.is_none())
+            {
+                lease.client = Some(client);
+            }
+        }
+    }
+
+    fn release_lease(&self, id: u64) {
+        self.shared.input.lock().expect("input mutex poisoned").leases.retain(|lease| lease.id != id);
     }
 
     /// Sends the wire lines in `payload` (`{"commands": [...]}`) to the app.
@@ -157,6 +316,7 @@ impl SessionHandle {
             .map(|line| line.parse::<Command>().map_err(|e| format!("`{line}`: {e}")))
             .collect::<Result<Vec<_>, _>>()?;
 
+        self.linger();
         let (endpoint, mut client) = self.checkout()?;
         let mut sent = Ok(());
         for command in &commands {
@@ -184,6 +344,7 @@ impl SessionHandle {
         } else {
             serde_json::from_value(payload).map_err(|e| e.to_string())?
         };
+        self.linger();
         let (endpoint, mut client) = self.checkout()?;
         let shot = client
             .screenshot(request.width, request.jpeg)
@@ -230,7 +391,8 @@ impl SessionHandle {
         let client = match kept {
             Some(client) => client,
             // The token stays out of the message: it is the only secret in the system.
-            None => Client::connect_as(&endpoint, ATTACH_NAME).map_err(|e| {
+            None => Client::connect_with(&endpoint, ATTACH_NAME, Role::Launcher).map_err(|e| {
+                self.note_reached(&endpoint, false);
                 format!("could not reach the app's input server at {}: {e}", endpoint.addr())
             })?,
         };
@@ -243,8 +405,42 @@ impl SessionHandle {
         let mut input = self.shared.input.lock().expect("input mutex poisoned");
         if input.endpoint.as_ref() == Some(endpoint) && input.client.is_none() {
             input.client = Some(client);
+            input.reached = true;
         }
     }
+
+    /// Records whether the app at `endpoint` could be reached, unless it has been
+    /// relaunched elsewhere in the meantime.
+    fn note_reached(&self, endpoint: &Endpoint, reached: bool) {
+        let mut input = self.shared.input.lock().expect("input mutex poisoned");
+        if input.endpoint.as_ref() == Some(endpoint) {
+            input.reached = reached;
+        }
+    }
+}
+
+/// An agent that is remote-controlling the app, for as long as this is held. See
+/// [`SessionHandle::open_lease`].
+pub(crate) struct LeaseGuard {
+    session: SessionHandle,
+    id: u64,
+}
+
+impl Drop for LeaseGuard {
+    fn drop(&mut self) {
+        self.session.release_lease(self.id);
+    }
+}
+
+/// `raw` as a name the app will accept: plain characters only, and short.
+/// Whatever asks for a lease picks its own name, so it is cleaned here.
+fn lease_name(raw: &str) -> String {
+    let name: String = raw
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || "._:/@+-".contains(c) { c } else { '-' })
+        .take(32)
+        .collect();
+    if name.is_empty() { "agent".to_owned() } else { name }
 }
 
 #[cfg(test)]

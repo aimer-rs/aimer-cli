@@ -1,5 +1,5 @@
 -- Lays out the install window of an `aimer package` disk image: icon view
--- without toolbar or status bar, the generated background, and the app and the
+-- without toolbar, status bar or path bar, the generated background, and the app and the
 -- Applications shortcut at fixed positions. Finder records all of it in the
 -- volume's .DS_Store.
 --
@@ -23,6 +23,8 @@ on run argv
         set current view of theWindow to icon view
         set toolbar visible of theWindow to false
         set statusbar visible of theWindow to false
+        -- The path bar is the dark "footer" strip with the volume name.
+        set pathbar visible of theWindow to false
         set the bounds of theWindow to {200, 120, 200 + winW, 120 + winH}
         set opts to the icon view options of theWindow
         set arrangement of opts to not arranged

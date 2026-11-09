@@ -21,6 +21,8 @@ use anyhow::{Context, bail};
 use super::reset_dir;
 use crate::commands::assemble::{Reporter, Step, StepKind};
 
+mod volume_icon;
+
 /// Draws the window background; tinted with the colors of the app's icon.
 const BACKGROUND_SCRIPT: &str = include_str!("../../../templates/macos/dmg_background.js");
 /// Positions the icons and applies the background through Finder.
@@ -139,6 +141,8 @@ fn stage_and_create(
                 // Drop what the styling left in the staging folder and any
                 // half-written image before starting over.
                 let _ = std::fs::remove_dir_all(format!("{staging}/.background"));
+                let _ =
+                    std::fs::remove_file(format!("{staging}/{}", volume_icon::VOLUME_ICON_FILE));
                 let _ = std::fs::remove_file(request.output);
                 create_plain_image(request, staging, reporter)
             }
@@ -203,6 +207,15 @@ fn create_styled_image(
         Step::new(StepKind::Other, "disk image background"),
     )?;
 
+    // The app's icon doubles as the volume icon, which Finder shows in the
+    // title bar of the window. Apps without an `.icns` keep the generic one.
+    let volume_icon = volume_icon::find_app_icon(request.app_path);
+    if let Some(icon) = &volume_icon {
+        let target = format!("{staging}/{}", volume_icon::VOLUME_ICON_FILE);
+        std::fs::copy(icon, &target)
+            .with_context(|| format!("copying {} to {target}", icon.display()))?;
+    }
+
     let writable = format!("{work}/writable.sparsebundle");
     reporter.run(
         diskutil_create_command("UDSB", Some(app_name), staging, &writable),
@@ -212,6 +225,19 @@ fn create_styled_image(
         diskutil_attach_command(&writable),
         Step::new(StepKind::Other, "diskutil image attach"),
     )?;
+
+    if volume_icon.is_some() {
+        // Only cosmetic: a failure (SetFile ships with the Xcode command line
+        // tools) must not discard the styled window.
+        if let Err(error) = reporter.run(
+            volume_icon::set_custom_icon_flag_command(app_name),
+            Step::new(StepKind::Other, "SetFile"),
+        ) {
+            reporter.note(format!(
+                "warning: could not set the volume icon ({error:#})"
+            ));
+        }
+    }
 
     reporter.note("Laying out the install window in Finder...".to_string());
     let laid_out = reporter.run(

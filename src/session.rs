@@ -8,7 +8,7 @@ mod runtime;
 
 use control::*;
 pub use input::InputRoute;
-pub use runtime::{ControlClient, RunSession, SessionRegistry, SessionRuntime};
+pub use runtime::{ControlClient, RemoteLease, RunSession, SessionRegistry, SessionRuntime};
 
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
@@ -291,6 +291,10 @@ pub struct SessionSnapshot {
     /// Latest resource sample and active recording status.
     #[serde(default)]
     pub resource_monitor: ResourceMonitorStatus,
+    /// Whether the app announced its input server and the session has reached it,
+    /// which is when the tools that drive the app are worth offering.
+    #[serde(default)]
+    pub input_connected: bool,
 }
 
 /// A persisted session descriptor used for discovery.

@@ -156,3 +156,45 @@ fn inspect_file_search_accepts_query_and_the_legacy_pattern_name() {
         assert_eq!(search.query, "TIMEOUT");
     }
 }
+
+fn offered(connected: bool) -> Vec<String> {
+    offered_tools(AimerMcpServer::tool_router().list_all(), connected)
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect()
+}
+
+#[test]
+fn without_a_connected_app_the_tools_that_drive_it_are_not_listed() {
+    let names = offered(false);
+    for tool in ["left_click", "right_click", "double_click", "mouse_move", "scroll", "key", "type", "tap", "swipe", "pinch", "send_input", "screenshot"] {
+        assert!(!names.iter().any(|n| n == tool), "{tool} needs an app");
+    }
+}
+
+#[test]
+fn the_tools_that_do_not_need_an_app_are_always_listed() {
+    // Session control and the code tools work on a session that is still building
+    // its app, and on none at all.
+    for connected in [false, true] {
+        let names = offered(connected);
+        for tool in ["restart_project", "stop_project", "get_logs", "cargo_check", "find_definition", "search_text"] {
+            assert!(names.iter().any(|n| n == tool), "{tool} (connected: {connected})");
+        }
+    }
+}
+
+#[test]
+fn with_a_connected_app_every_tool_is_listed() {
+    let all = AimerMcpServer::tool_router().list_all().len();
+    assert_eq!(offered(true).len(), all);
+    assert!(offered(false).len() < all);
+    assert!(offered(true).iter().any(|n| n == "left_click"));
+}
+
+#[test]
+fn the_app_tools_are_exactly_the_input_tools() {
+    let input: HashSet<String> = AimerMcpServer::input_tool_router().list_all().into_iter().map(|t| t.name.to_string()).collect();
+    assert_eq!(&input, app_tool_names());
+    assert!(!input.is_empty());
+}

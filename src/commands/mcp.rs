@@ -29,15 +29,16 @@ use session_helpers::*;
 use symbol_metadata::symbol_metadata;
 use tool_result::*;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, anyhow};
 use rmcp::handler::server::tool::{ToolCallContext, ToolRouter};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
-use rmcp::service::RequestContext;
+use rmcp::service::{NotificationContext, RequestContext};
 use rmcp::{RoleServer, ServiceExt, schemars, tool, tool_handler, tool_router, transport::stdio};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -384,6 +385,17 @@ struct AimerMcpServer {
     client_id: String,
     /// Whether this client asked for unabridged output.
     full_output: bool,
+    /// Says to the session, once this server first drives the app, that an agent is
+    /// remote-controlling it, until this server ends.
+    remote: Arc<RemoteHold>,
+}
+
+/// The claim that an agent is remote-controlling the app, taken on the first
+/// tool that acts on it and held for as long as this server lives, so the app can
+/// say an agent is there for the whole of the agent's work, busy or idle.
+#[derive(Default)]
+struct RemoteHold {
+    lease: std::sync::Mutex<Option<crate::session::RemoteLease>>,
 }
 
 impl AimerMcpServer {
@@ -399,11 +411,69 @@ impl AimerMcpServer {
     }
 }
 
-#[tool_handler(
-    router = Self::tool_router(),
-    instructions = "Call these tools through your MCP client's native tool interface. Do not start `aimer mcp` yourself or write JSON-RPC or scripts to talk to it; if the tools are not available in your tool list, say so instead. LSP calls may report indexing progress; wait for the result. Readiness failures are explicit."
-)]
+const INSTRUCTIONS: &str = "Call these tools through your MCP client's native tool interface. Do not start `aimer mcp` yourself or write JSON-RPC or scripts to talk to it; if the tools are not available in your tool list, say so instead. LSP calls may report indexing progress; wait for the result. Readiness failures are explicit. The tools that drive the running app (clicks, keys, typing, scrolling, touch, screenshots) are listed only while an app is connected to the session; the tool list changes when one connects or goes away.";
+
+/// How often the server looks at whether an app is connected, to tell the client
+/// when its tool list has changed.
+const APP_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+#[tool_handler(router = Self::tool_router())]
 impl rmcp::ServerHandler for AimerMcpServer {
+    fn get_info(&self) -> rmcp::model::ServerConfig {
+        rmcp::model::ServerConfig::new(
+            rmcp::model::ServerCapabilities::builder()
+                .enable_tools()
+                // The app tools come and go with the app.
+                .enable_tool_list_changed()
+                .build(),
+        )
+        .with_server_info(rmcp::model::Implementation::from_build_env())
+        .with_instructions(INSTRUCTIONS.to_string())
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
+        let tools = offered_tools(Self::tool_router().list_all(), self.app_connected().await);
+        Ok(rmcp::model::ListToolsResult {
+            result_type: Some(rmcp::model::ResultType::COMPLETE),
+            tools,
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            // What is offered depends on this session, not on the server alone.
+            cache_scope: supports_cache_hints.then_some(rmcp::model::CacheScope::Private),
+        })
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        // Without a session there is never an app to wait for.
+        if self.client.is_none() {
+            return;
+        }
+        let server = self.clone();
+        let peer = context.peer.clone();
+        tokio::spawn(async move {
+            let mut offered = server.app_connected().await;
+            loop {
+                tokio::time::sleep(APP_WATCH_INTERVAL).await;
+                let now = server.app_connected().await;
+                if now != offered {
+                    offered = now;
+                    // The client is gone when this fails: stop watching.
+                    if peer.notify_tool_list_changed().await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
@@ -431,7 +501,51 @@ impl rmcp::ServerHandler for AimerMcpServer {
     }
 }
 
+/// The names of the tools that act on the running app, which are exactly the
+/// input tools.
+fn app_tool_names() -> &'static HashSet<String> {
+    static NAMES: OnceLock<HashSet<String>> = OnceLock::new();
+    NAMES.get_or_init(|| {
+        AimerMcpServer::input_tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect()
+    })
+}
+
+/// `tools` without the ones that drive the app, unless one is connected.
+fn offered_tools(mut tools: Vec<rmcp::model::Tool>, app_connected: bool) -> Vec<rmcp::model::Tool> {
+    if !app_connected {
+        tools.retain(|tool| !app_tool_names().contains(tool.name.as_ref()));
+    }
+    tools
+}
+
 impl AimerMcpServer {
+    /// Whether this session is connected to a running app that takes input: the
+    /// app has announced its input server, the session has reached it, and the
+    /// app is still running. Attached to a session is not enough, because a
+    /// session whose app is still building, or has exited, has nothing to drive.
+    async fn app_connected(&self) -> bool {
+        let Some(client) = self.client.clone() else {
+            return false;
+        };
+        tokio::task::spawn_blocking(move || {
+            client
+                .request("ping", Value::Null)
+                .ok()
+                .and_then(|value| serde_json::from_value::<SessionSnapshot>(value).ok())
+                .is_some_and(|snapshot| {
+                    snapshot.input_connected
+                        && snapshot.app_process.is_some()
+                        && matches!(snapshot.status, SessionStatus::Running | SessionStatus::Error)
+                })
+        })
+        .await
+        .unwrap_or(false)
+    }
+
     async fn rust_position_request(
         &self,
         method: &str,
@@ -661,6 +775,7 @@ pub fn execute(
             resource_capture_lock: Arc::new(tokio::sync::Mutex::new(())),
             gate: WorkspaceGate::default(),
             client_id: "stdio".to_owned(),
+            remote: Arc::default(),
             full_output: full_output_enabled(),
         };
         if host_mode {

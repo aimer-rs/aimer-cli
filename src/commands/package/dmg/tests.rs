@@ -269,3 +269,37 @@ fn the_staging_failure_leaves_no_scratch_folder_behind() {
     assert!(!dist.path().join(STAGING_DIR_NAME).exists());
     assert!(!dist.path().join(WORK_DIR_NAME).exists());
 }
+
+#[test]
+fn an_app_icon_becomes_the_volume_icon() {
+    let app = tempfile::tempdir().unwrap();
+    let resources = app.path().join("Contents/Resources");
+    std::fs::create_dir_all(&resources).unwrap();
+    std::fs::write(resources.join("AppIcon.icns"), b"icns").unwrap();
+    let dist = tempfile::tempdir().unwrap();
+    let dist_path = dist.path().to_str().unwrap().to_string();
+    let output = format!("{dist_path}/App.dmg");
+    let app_path = app.path().to_str().unwrap();
+    let request = DmgRequest {
+        app_path,
+        ..request(&dist_path, &output, ImageTool::Diskutil, false)
+    };
+    let spy = SpyReporter::new();
+
+    build_dmg(&request, &spy).unwrap();
+
+    assert_eq!(
+        actions(&spy),
+        [
+            "ditto",
+            "ln",
+            "disk image background",
+            "diskutil image create (writable)",
+            "diskutil image attach",
+            "SetFile",
+            "disk image layout",
+            "diskutil eject",
+            "diskutil image create",
+        ]
+    );
+}

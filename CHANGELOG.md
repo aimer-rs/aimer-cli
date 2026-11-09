@@ -16,7 +16,7 @@ listed first.
 
 | Version                                   | Status      | Highlights                                                  |
 |-------------------------------------------|-------------|-------------------------------------------------------------|
-| [26.0.0-dev.2](changelogs/26.0.0-dev.2.md) | Development | `aimer input` and MCP tools to drive the running app, `update` and `components` commands |
+| [26.0.0-dev.2](changelogs/26.0.0-dev.2.md) | Development | `aimer input`, `aimer screenshot` and MCP tools to drive and see the running app, `update` and `components` commands |
 
 ## Adding a new release
 

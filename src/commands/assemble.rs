@@ -206,6 +206,22 @@ pub(crate) fn gradle_task(release: bool) -> &'static str {
     }
 }
 
+/// Where cargo puts what it builds for the project at `root`: `CARGO_TARGET_DIR`
+/// when that is set, so a build into a directory of its own is found there and
+/// not mistaken for the stale one under `target`, and otherwise `target`.
+fn target_dir_in(root: &Path, configured: Option<std::ffi::OsString>) -> PathBuf {
+    match configured.filter(|dir| !dir.is_empty()).map(PathBuf::from) {
+        Some(dir) if dir.is_absolute() => dir,
+        Some(dir) => root.join(dir),
+        None => root.join("target"),
+    }
+}
+
+/// [`target_dir_in`] for this process's environment.
+fn target_dir(root: &Path) -> PathBuf {
+    target_dir_in(root, std::env::var_os("CARGO_TARGET_DIR"))
+}
+
 /// Absolute path of the compiled Rust artifact for `rust_target`/`profile`.
 pub(crate) fn artifact_path(
     rust_target: &str,
@@ -215,8 +231,8 @@ pub(crate) fn artifact_path(
 ) -> String {
     let root = get_project_root(true).unwrap_or_else(|_| current_dir().unwrap());
     format!(
-        "{}/target/{}/{}/lib{}{}",
-        root.display(),
+        "{}/{}/{}/lib{}{}",
+        target_dir(&root).display(),
         rust_target,
         profile_name(release),
         lib_name,
@@ -344,12 +360,11 @@ pub(crate) fn desktop_bundle_path(target: Targets, pkg_name: &str, release: bool
 /// Cargo names the default binary after the package, dashes included, so the
 /// raw package name is used here rather than [`lib_name_of`].
 pub(crate) fn desktop_exe_path(pkg_name: &str, release: bool) -> String {
-    let project_path = get_project_root(true)
-        .unwrap_or_default()
+    let project_path = target_dir(&get_project_root(true).unwrap_or_default())
         .display()
         .to_string();
     format!(
-        "{project_path}/target/{}/{pkg_name}{}",
+        "{project_path}/{}/{pkg_name}{}",
         profile_name(release),
         std::env::consts::EXE_SUFFIX
     )

@@ -253,6 +253,14 @@ impl SessionRegistry {
     }
 }
 
+/// An agent's claim to be remote-controlling the session's app, which lasts as
+/// long as this does. See [`ControlClient::open_lease`].
+#[derive(Debug)]
+pub struct RemoteLease {
+    /// The open connection is the lease: closing it, or the process dying, ends it.
+    _connection: TcpStream,
+}
+
 /// A validated client for the private session control endpoint.
 #[derive(Clone, Debug)]
 pub struct ControlClient {
@@ -344,6 +352,37 @@ impl ControlClient {
                     .unwrap_or_else(|| "control request failed".to_string())
             ))
         }
+    }
+
+    /// Tells the session an agent is remote-controlling its app, until the returned
+    /// lease is dropped or this process ends.
+    ///
+    /// The session shows the app that an agent is there for as long as the lease is
+    /// held, however idle the agent is, because the lease is a connection that
+    /// stays open and the session notices when it closes. An agent whose process is
+    /// killed is noticed the same way.
+    pub fn open_lease(&self, name: &str) -> anyhow::Result<RemoteLease> {
+        let request_id = Uuid::new_v4().to_string();
+        let request = json!({
+            "request_id": request_id,
+            "token": self.descriptor.token,
+            "operation": super::control::REMOTE_BEGIN,
+            "payload": { "name": name },
+        });
+        let address = self.descriptor.endpoint.parse().context("invalid aimer MCP endpoint")?;
+        let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
+        stream.set_read_timeout(Some(LIVENESS_TIMEOUT))?;
+        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        serde_json::to_writer(&mut stream, &request)?;
+        stream.write_all(b"\n")?;
+        stream.flush()?;
+        let mut response_line = String::new();
+        BufReader::new(stream.try_clone()?).read_line(&mut response_line)?;
+        let response: WireResponse =
+            serde_json::from_str(&response_line).context("invalid response from aimer MCP control endpoint")?;
+        anyhow::ensure!(response.ok && response.request_id == request_id, "the session refused the lease");
+        stream.set_read_timeout(None)?;
+        Ok(RemoteLease { _connection: stream })
     }
 
     /// Validate endpoint liveness and the descriptor token.

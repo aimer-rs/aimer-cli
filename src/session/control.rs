@@ -40,6 +40,10 @@ pub(super) fn serve(listener: TcpListener, shared: Arc<SharedSession>, shutdown:
 }
 
 pub(super) fn serve_connection(mut stream: TcpStream, shared: Arc<SharedSession>) {
+    // The listener is non-blocking, and on macOS a connection it accepts inherits
+    // that: an idle read would then fail at once instead of waiting, which closes a
+    // connection that is meant to stay open, such as an agent's lease.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(REQUEST_TIMEOUT));
     let reader_stream = match stream.try_clone() {
         Ok(stream) => stream,
@@ -53,6 +57,12 @@ pub(super) fn serve_connection(mut stream: TcpStream, shared: Arc<SharedSession>
             Ok(_) => {}
         }
         let response = match serde_json::from_str::<WireRequest>(&line) {
+            Ok(request) if request.operation == REMOTE_BEGIN && request.token == shared.token => {
+                // The one request whose connection is the point: the agent is
+                // remote-controlling the app until this connection ends.
+                hold_lease(request, stream, reader, &shared);
+                return;
+            }
             Ok(request) => handle_request(request, &shared),
             Err(error) => WireResponse {
                 request_id: String::new(),
@@ -66,6 +76,33 @@ pub(super) fn serve_connection(mut stream: TcpStream, shared: Arc<SharedSession>
             || stream.flush().is_err()
         {
             break;
+        }
+    }
+    let _ = stream.shutdown(Shutdown::Both);
+}
+
+/// The operation that says an agent is remote-controlling the app for as long as
+/// the connection it is sent on stays open. See [`ControlClient::open_lease`].
+pub(crate) const REMOTE_BEGIN: &str = "remote_begin";
+
+/// Holds a [`REMOTE_BEGIN`] lease until the client goes away, which is how the
+/// app comes to know an agent has left: the process that held the connection
+/// ended, or let go of it. Whatever else the client sends is ignored.
+fn hold_lease(request: WireRequest, mut stream: TcpStream, mut reader: BufReader<TcpStream>, shared: &Arc<SharedSession>) {
+    let handle = SessionHandle { shared: Arc::clone(shared), run_id: None };
+    let _lease = handle.open_lease(request.payload["name"].as_str().unwrap_or("agent"));
+    let reply = WireResponse { request_id: request.request_id, ok: true, result: None, error: None };
+    if serde_json::to_writer(&mut stream, &reply).is_err() || stream.write_all(b"\n").is_err() || stream.flush().is_err() {
+        return;
+    }
+    // An agent can be idle for as long as it likes: no request timeout applies.
+    let _ = stream.set_read_timeout(None);
+    let mut ignored = String::new();
+    loop {
+        ignored.clear();
+        match reader.read_line(&mut ignored) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
@@ -114,6 +151,7 @@ pub(super) fn snapshot_locked(shared: &SharedSession, state: &SessionState) -> S
         app_process: state.app_process.clone(),
         app_url: state.app_url.clone(),
         resource_monitor: state.resource_monitor.clone(),
+        input_connected: shared.input.lock().expect("input mutex poisoned").is_connected(),
     }
 }
 

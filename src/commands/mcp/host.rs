@@ -209,6 +209,8 @@ async fn serve_connection(
     let mut server = server;
     server.client_id = client.clone();
     server.full_output = handshake.full_output;
+    // Each client is its own agent: it holds its own lease, which ends with it.
+    server.remote = std::sync::Arc::default();
     let service = server.serve((reader, writer)).await?;
     let result = service.waiting().await;
     drop(connection);
