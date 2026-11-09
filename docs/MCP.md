@@ -61,6 +61,10 @@ Once connected, your AI assistant can execute the following tools:
 - `stop_project`: Stop the running project session.
 - `get_logs`: Fetch bounded build, app, or system logs with cursor pagination and source code locations.
 - `clear_logs`: Clear retained logs up to a specific sequence boundary.
+- `left_click`, `right_click`, `middle_click`, `double_click`, `triple_click`, `mouse_move`, `left_click_drag`, `scroll`, `key`, and `type`: Drive the running app like a mouse and keyboard — the mouse glides to its targets along a curved, eased path rather than jumping, and a command sent mid-glide retargets it — in the vocabulary of the computer-use tools. Coordinates are `[x, y]` logical pixels from the top-left corner of the app's window; a click tool's `coordinate` is optional (without it the click happens wherever the mouse already is, once an earlier click, `mouse_move` or `scroll` has placed it), `scroll` is a smooth trackpad-style swipe and takes `scroll_direction`, `scroll_amount` (steps of 40 pixels) and an optional `coordinate` (without it, it scrolls wherever the mouse already is), `key` takes `text` such as `Return` or `ctrl+a`, and `type` types `text` a keystroke at a time at a human pace (a long text is typed faster, within about three seconds). They need the attached app to accept input; see [Driving the app](#driving-the-app).
+- `tap`, `swipe`, and `pinch`: The touch gestures for an app on a phone or tablet.
+- `screenshot`: See the running app: a picture of its window as the app itself drew it, with nothing else on the screen. A pixel in the picture is a logical pixel by default, so its coordinates can be passed straight to the click, scroll and drag tools; `max_width` and `jpeg_quality` make it smaller, and the reply says what to divide by. Use it to check the result of an action.
+- `send_input`: Send raw `aimer_prendre` protocol lines for events the tools above do not cover (`back`, `link`, `menu`, `file-drop`, `preedit`, `quit`, ...). The whole request is checked before anything is sent.
 - `get_resource_usage`: Read the latest app CPU, GPU, memory, PID, and thread sample.
 - `set_resource_monitor_interval`: Set the live sample interval to 500–3000 ms; omit `interval_ms` to restore the global default.
 - `record_resource_usage`: Capture a bounded sample window with `duration` in seconds (0.5–300) and `interval` in seconds (0.5–3), then return the samples inline and the run recording ID.
@@ -127,7 +131,7 @@ Tool calls follow a readers-writer rule, with a fair queue so a waiting write is
 | Read | search, find, hover, `inspect_file`, diagnostics, docs, `get_*`, and every preview tool (`preview_edit`, `rename_symbol`, `format`, `preview_code_action`, `preview_manifest_edit`) | Any number at once |
 | Build | `cargo_check`, `cargo_test`, `cargo_run`, `check` | Run beside reads, one at a time |
 | Write | `apply_edit`, `start_lsp` | Runs alone |
-| Session | `restart_project`, `stop_project`, `clear_logs`, `set_resource_monitor_interval`, `record_resource_usage` | One at a time; control the running app, not the workspace files |
+| Session | `restart_project`, `stop_project`, `clear_logs`, `set_resource_monitor_interval`, `record_resource_usage`, and every input tool (`left_click`, `key`, `type`, `scroll`, `tap`, `send_input`, `screenshot`, ...) | One at a time; control the running app, not the workspace files |
 
 A call that cannot get its lock within a minute (five for builds) returns a `busy` error that names the current holder; retry it shortly. Unlisted tools are treated as writes.
 
@@ -195,3 +199,36 @@ Resource settings live in the global `~/.aimer/config.toml`:
 sample_interval_ms = 1000 # 500–3000 ms
 retention_days = 30       # 1–3650 days
 ```
+
+## Driving the app
+
+`aimer run` asks the app it launches to accept synthetic input, and the input tools above, and `aimer input` in a shell, send it. Nothing needs to change in the app: a debug build of an Aimer app starts the input server when the launcher sets `AIMER_PRENDRE`, and a release build never does.
+
+```sh
+aimer input click 120 48
+aimer input key ctrl+a
+aimer input type "hello"
+aimer input scroll 200 300 down 3
+aimer input send "back invoke" "link aimer://item/7"
+```
+
+```sh
+aimer screenshot -o app.png          # the app's window, at its logical size
+aimer screenshot --jpeg 70 --width 800
+```
+
+The picture is drawn by the app itself, so it holds only the app — no other window, no desktop — and needs no screen-recording permission. It works where the renderer can copy its frames out, which today is Metal on macOS and iOS; elsewhere the command says so at once.
+
+`aimer input` sends to the only live session; pass `--session <id>` (see `aimer sessions`) when there are several.
+
+How it reaches the app depends on where the app runs:
+
+| Target | Route |
+|---|---|
+| macOS, desktop, iOS Simulator | Loopback. |
+| iOS device | The device's `devicectl` tunnel address, so it works wired and wireless. The app listens beyond loopback for the run, which exposes it to its network with a random per-run token as the only protection. |
+
+While the session is attached the app shows a `driven by aimer-cli` badge in the corner of its window, and draws where each injected pointer and finger is (the cursor icon for the mouse, which sways gently when it rests), so a screenshot of a driven app shows what the agent did. A debug build only.
+
+Set `AIMER_PRENDRE=0` in the environment of `aimer run` to turn all of this off. Android is not wired yet.
+

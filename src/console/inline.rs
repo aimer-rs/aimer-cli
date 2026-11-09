@@ -159,7 +159,7 @@ impl InlineSession {
         self.state.clear_app();
         self.state.status = Status::Compiling(0);
         self.stages = StageBook::new();
-        self.notice("Hot restart requested".to_string());
+        // self.notice("Hot restart requested".to_string());
         self.build_lock_wait = None;
     }
 

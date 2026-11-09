@@ -10,7 +10,7 @@ fn configuration(project_root: &Path) -> RunConfiguration {
     }
 }
 
-fn in_memory_handle(project_root: &Path) -> SessionHandle {
+pub(super) fn in_memory_handle(project_root: &Path) -> SessionHandle {
     let resource_config = ResourceMonitorConfig::default();
     let shared = Arc::new(SharedSession {
         session_id: Uuid::new_v4(),
@@ -38,6 +38,7 @@ fn in_memory_handle(project_root: &Path) -> SessionHandle {
         }),
         wake: Condvar::new(),
         mutation: Mutex::new(()),
+        input: Mutex::default(),
     });
     SessionHandle {
         shared,

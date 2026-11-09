@@ -30,6 +30,7 @@ Use this workflow for Rust tasks in any workspace or crates selected in Aimer MC
 - `clear_logs`
 - `completion`
 - `document_highlights`
+- `double_click`
 - `expand_macro`
 - `find_declaration`
 - `find_definition`
@@ -50,7 +51,13 @@ Use this workflow for Rust tasks in any workspace or crates selected in Aimer MC
 - `hover`
 - `inlay_hints`
 - `inspect_file`
+- `key`
+- `left_click_drag`
+- `left_click`
 - `list_resource_recordings`
+- `middle_click`
+- `mouse_move`
+- `pinch`
 - `prepare_rename`
 - `preview_code_action`
 - `preview_edit`
@@ -58,15 +65,29 @@ Use this workflow for Rust tasks in any workspace or crates selected in Aimer MC
 - `record_resource_usage`
 - `rename_symbol`
 - `restart_project`
+- `right_click`
+- `screenshot`
+- `scroll`
 - `search_crate_docs`
 - `search_symbols`
 - `search_text`
+- `send_input`
 - `set_resource_monitor_interval`
 - `signature_help`
 - `start_lsp`
 - `status`
 - `stop_project`
+- `swipe`
+- `tap`
+- `triple_click`
 - `type_definition`
+- `type`
+
+## Drive the running app
+
+- When an Aimer run session is attached and its app accepts input, the Aimer MCP tools `left_click`, `right_click`, `double_click`, `mouse_move`, `left_click_drag`, `scroll`, `key`, and `type` act on the app like a mouse and keyboard, and `tap`, `swipe`, and `pinch` are the touch equivalents. Coordinates are logical pixels from the top-left corner of the app's window.
+- Use `send_input` for events those do not cover, such as `back invoke`, `link URL`, or `file-drop PATH`. An input tool fails with a reason when the app has not announced an input server, for example in a release build.
+- Check the result with `screenshot`, which returns a picture of the app's window as the app drew it (by default one pixel is one logical pixel, so coordinates in the picture can be passed straight to the input tools), and with `get_logs`. The input tools themselves return only how many events were sent.
 
 ## Search and inspect
 

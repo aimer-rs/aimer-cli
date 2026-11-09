@@ -1,10 +1,13 @@
 //! Run-session identity, discovery, and the private control protocol used by
 //! the aimer mcp adapter.
 
+mod base64;
 mod control;
+mod input;
 mod runtime;
 
 use control::*;
+pub use input::InputRoute;
 pub use runtime::{ControlClient, RunSession, SessionRegistry, SessionRuntime};
 
 use std::collections::VecDeque;
@@ -406,6 +409,8 @@ struct SharedSession {
     state: Mutex<SessionState>,
     wake: Condvar,
     mutation: Mutex<()>,
+    /// How the app this session launched is driven; see [`InputRoute`].
+    input: Mutex<input::InputState>,
 }
 
 /// A cloneable handle used by the run loop to publish state and consume
@@ -792,6 +797,8 @@ impl SessionHandle {
                     self.request_mutation(|reply| SessionCommand::ClearLogs { request, reply })?;
                 serde_json::to_value(result).map_err(|e| e.to_string())
             }
+            "input" => self.send_input(payload),
+            "screenshot" => self.screenshot(payload),
             other => Err(format!("unknown control operation '{other}'")),
         }
     }

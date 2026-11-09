@@ -190,6 +190,12 @@ enum Commands {
         install: Vec<String>,
     },
 
+    /// Send a click, key or gesture to the app a run session launched.
+    Input(commands::input::InputArgs),
+
+    /// Take a picture of the window of the app a run session launched.
+    Screenshot(commands::screenshot::ScreenshotArgs),
+
     /// List live Aimer run sessions.
     Sessions {
         /// Restrict discovery to a project path.
@@ -469,6 +475,8 @@ fn main() -> anyhow::Result<()> {
                 );
             }
         }
+        Some(Commands::Input(args)) => commands::input::execute(args)?,
+        Some(Commands::Screenshot(args)) => commands::screenshot::execute(args)?,
         Some(Commands::Sessions { project, json }) => {
             commands::sessions::list_sessions(project.clone(), *json)?;
         }

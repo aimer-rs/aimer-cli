@@ -5,6 +5,7 @@ mod edit_tools;
 mod host;
 mod ide_tools;
 mod implementation_results;
+mod input_tools;
 mod locations;
 mod markdown;
 mod navigation_tools;
@@ -389,6 +390,7 @@ impl AimerMcpServer {
     fn tool_router() -> ToolRouter<Self> {
         portable_schema::portable_router(
             Self::project_tool_router()
+                + Self::input_tool_router()
                 + Self::ide_tool_router()
                 + Self::cargo_tool_router()
                 + Self::navigation_tool_router()

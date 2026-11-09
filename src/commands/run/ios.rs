@@ -9,6 +9,7 @@ use crate::commands::run::cargo_build::{
     stream_stdout_as_app_log,
 };
 use crate::commands::run::console::{RunnerEvent, Status};
+use crate::commands::run::input_launch;
 use crate::commands::run::helpers::{
     ConsoleReporter, build_log, fail, run_to_completion, set_status, spawn_streamed,
 };
@@ -132,10 +133,25 @@ impl Runner for IosRunner {
             return Flow::Abort;
         };
 
+        // A simulator shares this machine's loopback; a device is reached through
+        // the tunnel, and without its address there is nothing to connect to.
+        let input = if self.plan.simulator {
+            input_launch::enable(ctx, None)
+        } else {
+            match input_launch::device_address(&ctx.device.id) {
+                Some(ip) => input_launch::enable(ctx, Some(ip)),
+                None => {
+                    build_log(&ctx.tx, "Input: the device reports no tunnel address, so it cannot be driven.");
+                    Vec::new()
+                }
+            }
+        };
+
         if !launch_app(
             self.plan.simulator,
             &ctx.device,
             &bundle_id,
+            &input,
             &ctx.tx,
             &ctx.current_child,
         ) {
@@ -203,6 +219,7 @@ fn launch_app(
     simulator: bool,
     device: &Device,
     bundle_id: &str,
+    input: &[(&'static str, String)],
     tx: &Sender<RunnerEvent>,
     current_child_clone: &Arc<Mutex<Option<Child>>>,
 ) -> bool {
@@ -221,6 +238,10 @@ fn launch_app(
             bundle_id,
             JSON_OUTPUT_FLAG,
         ]);
+        // `simctl` hands the app every variable of its own that has this prefix.
+        for (name, value) in input {
+            launch.env(format!("SIMCTL_CHILD_{name}"), value);
+        }
 
         spawn_streamed(
             launch,
@@ -251,6 +272,10 @@ fn launch_app(
             ])
             .env("TERM", "dumb")
             .env(JSON_OUTPUT_ENV, "1");
+        // Likewise `devicectl`, with its own prefix.
+        for (name, value) in input {
+            launch.env(format!("DEVICECTL_CHILD_{name}"), value);
+        }
 
         spawn_streamed(
             launch,

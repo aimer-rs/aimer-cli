@@ -6,6 +6,7 @@ pub(crate) mod cargo_units;
 pub mod desktop;
 pub(crate) mod framed_block;
 pub(crate) mod helpers;
+pub(crate) mod input_launch;
 pub mod ios;
 pub mod macos;
 pub(crate) mod panic_report;

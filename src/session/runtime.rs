@@ -72,6 +72,7 @@ impl SessionRuntime {
             state: Mutex::new(state),
             wake: Condvar::new(),
             mutation: Mutex::new(()),
+            input: Mutex::default(),
         });
         let handle = SessionHandle {
             shared: Arc::clone(&shared),

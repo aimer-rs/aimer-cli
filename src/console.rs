@@ -94,6 +94,8 @@ pub(crate) fn observe_session_event(session: Option<&SessionHandle>, event: &Run
         RunnerEvent::AppLog(log) => {
             let message = crate::console::state::strip_ansi(log.message());
             let location = log.source_location().map(crate::console::state::strip_ansi);
+            // The app says where it accepts input in an ordinary log line.
+            session.observe_app_message(&message);
             session.push_log(LogStream::App, "info", message, location);
         }
         RunnerEvent::AppPanic(report) => {

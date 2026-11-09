@@ -22,6 +22,7 @@ name = "aimer_cli"
 version = "0.10.0"
 dependencies = [
  "aimer_config",
+ "aimer_prendre",
  "ansi-to-tui",
  "anyhow",
  "arboard",
@@ -84,6 +85,10 @@ dependencies = [
  "toml",
  "tracing",
 ]
+
+[[package]]
+name = "aimer_prendre"
+version = "0.1.0"
 
 [[package]]
 name = "allocator-api2"

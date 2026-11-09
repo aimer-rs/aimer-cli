@@ -24,6 +24,8 @@ pub mod migrate;
 pub mod package;
 mod project_selection;
 pub mod run;
+pub mod input;
+pub mod screenshot;
 pub mod sessions;
 pub mod skill_install;
 pub mod update;
