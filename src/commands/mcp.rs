@@ -14,6 +14,8 @@ mod position;
 mod project_tools;
 mod rust_response;
 mod session_helpers;
+mod session_link;
+mod session_tools;
 mod symbol_metadata;
 mod tool_result;
 mod trim;
@@ -26,6 +28,7 @@ use markdown::{error_markdown, to_markdown};
 use position::*;
 use rust_response::*;
 use session_helpers::*;
+use session_link::{LinkMode, SessionLink};
 use symbol_metadata::symbol_metadata;
 use tool_result::*;
 
@@ -374,7 +377,8 @@ struct RustPreviewEditArguments {
 
 #[derive(Clone)]
 struct AimerMcpServer {
-    client: Option<ControlClient>,
+    /// The Aimer session this connection controls; it can change while it lives.
+    link: Arc<SessionLink>,
     docs: DocsRsClient,
     project_root: PathBuf,
     rust_analyzer: RustAnalyzerBridge,
@@ -395,13 +399,25 @@ struct AimerMcpServer {
 /// say an agent is there for the whole of the agent's work, busy or idle.
 #[derive(Default)]
 struct RemoteHold {
-    lease: std::sync::Mutex<Option<crate::session::RemoteLease>>,
+    /// The lease, with the epoch of the session it was taken on.
+    lease: std::sync::Mutex<Option<(u64, crate::session::RemoteLease)>>,
+}
+
+impl RemoteHold {
+    /// Lets go of the claim, which tells the session the agent is no longer there.
+    fn release(&self) {
+        self.lease
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
 }
 
 impl AimerMcpServer {
     fn tool_router() -> ToolRouter<Self> {
         portable_schema::portable_router(
             Self::project_tool_router()
+                + Self::session_tool_router()
                 + Self::input_tool_router()
                 + Self::ide_tool_router()
                 + Self::cargo_tool_router()
@@ -411,7 +427,7 @@ impl AimerMcpServer {
     }
 }
 
-const INSTRUCTIONS: &str = "Call these tools through your MCP client's native tool interface. Do not start `aimer mcp` yourself or write JSON-RPC or scripts to talk to it; if the tools are not available in your tool list, say so instead. LSP calls may report indexing progress; wait for the result. Readiness failures are explicit. The tools that drive the running app (clicks, keys, typing, scrolling, touch, screenshots) are listed only while an app is connected to the session; the tool list changes when one connects or goes away.";
+const INSTRUCTIONS: &str = "Call these tools through your MCP client's native tool interface. Do not start `aimer mcp` yourself or write JSON-RPC or scripts to talk to it; if the tools are not available in your tool list, say so instead. LSP calls may report indexing progress; wait for the result. Readiness failures are explicit. The tools that drive the running app (clicks, keys, typing, scrolling, touch, screenshots) are listed only while an app is connected to the session; the tool list changes when one connects or goes away. Session tools act on the session this connection controls: with exactly one live session for the workspace it is attached automatically, even when it starts after this server; otherwise call `list_sessions` and `attach_session`.";
 
 /// How often the server looks at whether an app is connected, to tell the client
 /// when its tool list has changed.
@@ -452,16 +468,16 @@ impl rmcp::ServerHandler for AimerMcpServer {
     }
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
-        // Without a session there is never an app to wait for.
-        if self.client.is_none() {
-            return;
-        }
+        // Watching also finds the session that starts after this server did.
         let server = self.clone();
         let peer = context.peer.clone();
         tokio::spawn(async move {
             let mut offered = server.app_connected().await;
             loop {
                 tokio::time::sleep(APP_WATCH_INTERVAL).await;
+                if peer.is_transport_closed() {
+                    break;
+                }
                 let now = server.app_connected().await;
                 if now != offered {
                     offered = now;
@@ -528,10 +544,11 @@ impl AimerMcpServer {
     /// app is still running. Attached to a session is not enough, because a
     /// session whose app is still building, or has exited, has nothing to drive.
     async fn app_connected(&self) -> bool {
-        let Some(client) = self.client.clone() else {
-            return false;
-        };
+        let link = self.link.clone();
         tokio::task::spawn_blocking(move || {
+            let Some(client) = link.current() else {
+                return false;
+            };
             client
                 .request("ping", Value::Null)
                 .ok()
@@ -539,7 +556,10 @@ impl AimerMcpServer {
                 .is_some_and(|snapshot| {
                     snapshot.input_connected
                         && snapshot.app_process.is_some()
-                        && matches!(snapshot.status, SessionStatus::Running | SessionStatus::Error)
+                        && matches!(
+                            snapshot.status,
+                            SessionStatus::Running | SessionStatus::Error
+                        )
                 })
         })
         .await
@@ -585,13 +605,16 @@ impl AimerMcpServer {
         ))
     }
 
+    /// The session this connection controls now; in automatic mode, the
+    /// project's only live session.
+    fn live_client(&self) -> anyhow::Result<ControlClient> {
+        self.link.current().ok_or_else(|| {
+            anyhow!("no live Aimer session is attached; start one with `aimer run`, or call list_sessions and attach_session (or pass --attach with a session ID)")
+        })
+    }
+
     fn request_live(&self, operation: &str, payload: Value) -> anyhow::Result<Value> {
-        self.client
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow!("no live Aimer session is attached; use --attach with a session ID for live controls")
-            })?
-            .request(operation, payload)
+        self.live_client()?.request(operation, payload)
     }
 
     fn require_aimer_project(&self) -> anyhow::Result<()> {
@@ -619,8 +642,9 @@ impl AimerMcpServer {
         );
 
         let _capture_lock = self.resource_capture_lock.lock().await;
+        let client = self.live_client()?;
         let snapshot: SessionSnapshot =
-            serde_json::from_value(self.request_live("ping", Value::Null)?)
+            serde_json::from_value(client.request("ping", Value::Null)?)
                 .context("decoding live Aimer session status")?;
         anyhow::ensure!(
             matches!(
@@ -631,11 +655,6 @@ impl AimerMcpServer {
         );
 
         let interval_ms = (arguments.interval * 1_000.0).round() as u64;
-        let client = self
-            .client
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| anyhow!("no live Aimer session is attached"))?;
         let mut interval_restore =
             ResourceIntervalRestore::new(client, snapshot.resource_monitor.interval_ms);
         interval_restore.set_interval(interval_ms)?;
@@ -751,7 +770,18 @@ pub fn execute(
             Err(error) => tracing::debug!(error = %error, "MCP proxy failed; serving standalone"),
         }
     }
+    let pinned = attach.is_some();
     let (client, project_root) = select_context(project, attach)?;
+    let link = Arc::new(SessionLink::new(
+        project_root.clone(),
+        SessionRegistry::default_location().ok(),
+        client,
+        if pinned {
+            LinkMode::Pinned
+        } else {
+            LinkMode::Automatic
+        },
+    ));
     let docs = DocsRsClient::new(project_root.clone())?;
     let rust_analyzer =
         RustAnalyzerBridge::new(project_root.clone(), crate::config::rust_analyzer_config());
@@ -768,7 +798,7 @@ pub fn execute(
     .context("starting MCP runtime")?;
     runtime.block_on(async move {
         let server = AimerMcpServer {
-            client,
+            link,
             docs,
             project_root,
             rust_analyzer,

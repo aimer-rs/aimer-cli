@@ -28,7 +28,7 @@ pub fn create(dir: &Path, name: &str, _app_name: &str, group: &str) {
     // The project links whatever `RustLinkFlags.xcconfig` says; until the
     // first `aimer` build derives the real list from the crate graph, the
     // defaults keep an Xcode-only build working.
-    link_flags::scaffold(&ios_dir, link_flags::DEFAULT_IOS_FLAGS).unwrap();
+    link_flags::scaffold(&ios_dir, &link_flags::default_ios_flags()).unwrap();
 
     let app_dir = ios_dir.join(project_name);
     fs::create_dir_all(&app_dir).unwrap();

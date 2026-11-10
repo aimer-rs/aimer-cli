@@ -31,7 +31,10 @@ impl InputRoute {
     /// A route with a fresh random token, reaching the app at `ip` or, for an app
     /// on this machine, on loopback.
     pub fn new(ip: Option<IpAddr>) -> Self {
-        Self { token: Uuid::new_v4().simple().to_string(), ip }
+        Self {
+            token: Uuid::new_v4().simple().to_string(),
+            ip,
+        }
     }
 
     /// Whether the app must listen beyond loopback to be reached.
@@ -42,7 +45,10 @@ impl InputRoute {
 
     /// The variables to launch the app with.
     pub fn environment(&self) -> Vec<(&'static str, String)> {
-        let mut vars = vec![(env::ENABLE, "1".to_owned()), (env::TOKEN, self.token.clone())];
+        let mut vars = vec![
+            (env::ENABLE, "1".to_owned()),
+            (env::TOKEN, self.token.clone()),
+        ];
         if self.is_remote() {
             // A phone's loopback is not reachable from here; its tunnel is.
             vars.push((env::BIND, "::".to_owned()));
@@ -59,7 +65,10 @@ impl InputRoute {
         if endpoint.token() != self.token {
             return None;
         }
-        Some(self.ip.map_or_else(|| endpoint.clone(), |ip| endpoint.with_ip(ip)))
+        Some(
+            self.ip
+                .map_or_else(|| endpoint.clone(), |ip| endpoint.with_ip(ip)),
+        )
     }
 }
 
@@ -174,7 +183,11 @@ impl SessionHandle {
     pub(crate) fn observe_app_message(&self, message: &str) {
         let endpoint = {
             let mut input = self.shared.input.lock().expect("input mutex poisoned");
-            let Some(endpoint) = input.route.as_ref().and_then(|route| route.endpoint_in(message)) else {
+            let Some(endpoint) = input
+                .route
+                .as_ref()
+                .and_then(|route| route.endpoint_in(message))
+            else {
                 return;
             };
             input.endpoint = Some(endpoint.clone());
@@ -217,13 +230,27 @@ impl SessionHandle {
             let mut input = self.shared.input.lock().expect("input mutex poisoned");
             let id = input.next_lease;
             input.next_lease += 1;
-            if input.leases.iter().filter(|lease| lease.expires.is_none()).count() < MAX_LEASES {
-                input.leases.push(Lease { id, name: lease_name(name), client: None, expires: None });
+            if input
+                .leases
+                .iter()
+                .filter(|lease| lease.expires.is_none())
+                .count()
+                < MAX_LEASES
+            {
+                input.leases.push(Lease {
+                    id,
+                    name: lease_name(name),
+                    client: None,
+                    expires: None,
+                });
             }
             id
         };
         self.connect_leases();
-        LeaseGuard { session: self.clone(), id }
+        LeaseGuard {
+            session: self.clone(),
+            id,
+        }
     }
 
     /// Counts a one-shot request as an agent for the next [`LINGER`], unless an
@@ -240,18 +267,29 @@ impl SessionHandle {
                 return;
             }
             let until = Some(Instant::now() + LINGER);
-            match input.leases.iter_mut().find(|lease| lease.expires.is_some()) {
+            match input
+                .leases
+                .iter_mut()
+                .find(|lease| lease.expires.is_some())
+            {
                 Some(lease) => lease.expires = until,
                 None => {
                     let id = input.next_lease;
                     input.next_lease += 1;
-                    input.leases.push(Lease { id, name: ONE_SHOT_NAME.to_owned(), client: None, expires: until });
+                    input.leases.push(Lease {
+                        id,
+                        name: ONE_SHOT_NAME.to_owned(),
+                        client: None,
+                        expires: until,
+                    });
                 }
             }
             if !input.reaping {
                 input.reaping = true;
                 let session = self.clone();
-                let _ = std::thread::Builder::new().name("aimer-input-linger".into()).spawn(move || session.reap());
+                let _ = std::thread::Builder::new()
+                    .name("aimer-input-linger".into())
+                    .spawn(move || session.reap());
             }
         }
         self.connect_leases();
@@ -263,7 +301,9 @@ impl SessionHandle {
             std::thread::sleep(REAP_EVERY);
             let mut input = self.shared.input.lock().expect("input mutex poisoned");
             let now = Instant::now();
-            input.leases.retain(|lease| lease.expires.is_none_or(|until| until > now));
+            input
+                .leases
+                .retain(|lease| lease.expires.is_none_or(|until| until > now));
             if input.leases.iter().all(|lease| lease.expires.is_none()) {
                 input.reaping = false;
                 return;
@@ -275,7 +315,9 @@ impl SessionHandle {
     fn connect_leases(&self) {
         let (endpoint, waiting) = {
             let input = self.shared.input.lock().expect("input mutex poisoned");
-            let Some(endpoint) = input.endpoint.clone() else { return };
+            let Some(endpoint) = input.endpoint.clone() else {
+                return;
+            };
             let waiting: Vec<(u64, String)> = input
                 .leases
                 .iter()
@@ -286,11 +328,16 @@ impl SessionHandle {
         };
         for (id, name) in waiting {
             // Reaching a phone can take a while, so no lock is held while it does.
-            let Ok(client) = Client::connect_with(&endpoint, &name, Role::Agent) else { continue };
+            let Ok(client) = Client::connect_with(&endpoint, &name, Role::Agent) else {
+                continue;
+            };
             let mut input = self.shared.input.lock().expect("input mutex poisoned");
             // Still wanted, still the same app, and not already connected meanwhile.
             if input.endpoint.as_ref() == Some(&endpoint)
-                && let Some(lease) = input.leases.iter_mut().find(|lease| lease.id == id && lease.client.is_none())
+                && let Some(lease) = input
+                    .leases
+                    .iter_mut()
+                    .find(|lease| lease.id == id && lease.client.is_none())
             {
                 lease.client = Some(client);
             }
@@ -298,7 +345,12 @@ impl SessionHandle {
     }
 
     fn release_lease(&self, id: u64) {
-        self.shared.input.lock().expect("input mutex poisoned").leases.retain(|lease| lease.id != id);
+        self.shared
+            .input
+            .lock()
+            .expect("input mutex poisoned")
+            .leases
+            .retain(|lease| lease.id != id);
     }
 
     /// Sends the wire lines in `payload` (`{"commands": [...]}`) to the app.
@@ -313,14 +365,19 @@ impl SessionHandle {
         let commands = request
             .commands
             .iter()
-            .map(|line| line.parse::<Command>().map_err(|e| format!("`{line}`: {e}")))
+            .map(|line| {
+                line.parse::<Command>()
+                    .map_err(|e| format!("`{line}`: {e}"))
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         self.linger();
         let (endpoint, mut client) = self.checkout()?;
         let mut sent = Ok(());
         for command in &commands {
-            sent = client.send(command).map_err(|e| format!("the app refused `{command}`: {e}"));
+            sent = client
+                .send(command)
+                .map_err(|e| format!("the app refused `{command}`: {e}"));
             if sent.is_err() {
                 break;
             }
@@ -360,7 +417,8 @@ impl SessionHandle {
         });
         match request.save_to {
             Some(path) => {
-                std::fs::write(&path, &shot.bytes).map_err(|e| format!("could not write {path}: {e}"))?;
+                std::fs::write(&path, &shot.bytes)
+                    .map_err(|e| format!("could not write {path}: {e}"))?;
                 reply["path"] = json!(path);
             }
             None => reply["data"] = json!(super::base64::encode(&shot.bytes)),
@@ -376,14 +434,18 @@ impl SessionHandle {
             let mut input = self.shared.input.lock().expect("input mutex poisoned");
             match (&input.route, &input.endpoint) {
                 (None, _) => {
-                    return Err("this run does not accept input: its target cannot be driven, or \
+                    return Err(
+                        "this run does not accept input: its target cannot be driven, or \
                                 AIMER_PRENDRE=0 is set"
-                        .to_owned());
+                            .to_owned(),
+                    );
                 }
                 (Some(_), None) => {
-                    return Err("the app has not announced its input server: it is still starting, \
+                    return Err(
+                        "the app has not announced its input server: it is still starting, \
                                 it is a release build, or it does not start `aimer_prendre`"
-                        .to_owned());
+                            .to_owned(),
+                    );
                 }
                 (Some(_), Some(endpoint)) => (endpoint.clone(), input.client.take()),
             }
@@ -393,7 +455,10 @@ impl SessionHandle {
             // The token stays out of the message: it is the only secret in the system.
             None => Client::connect_with(&endpoint, ATTACH_NAME, Role::Launcher).map_err(|e| {
                 self.note_reached(&endpoint, false);
-                format!("could not reach the app's input server at {}: {e}", endpoint.addr())
+                format!(
+                    "could not reach the app's input server at {}: {e}",
+                    endpoint.addr()
+                )
             })?,
         };
         Ok((endpoint, client))
@@ -437,10 +502,20 @@ impl Drop for LeaseGuard {
 fn lease_name(raw: &str) -> String {
     let name: String = raw
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || "._:/@+-".contains(c) { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._:/@+-".contains(c) {
+                c
+            } else {
+                '-'
+            }
+        })
         .take(32)
         .collect();
-    if name.is_empty() { "agent".to_owned() } else { name }
+    if name.is_empty() {
+        "agent".to_owned()
+    } else {
+        name
+    }
 }
 
 #[cfg(test)]

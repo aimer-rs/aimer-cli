@@ -100,7 +100,7 @@ fn dotnet_tools_install_into_the_managed_bin() {
             "wix"
         ]
     );
-     #[cfg(not(target_os = "windows"))]
+    #[cfg(not(target_os = "windows"))]
     assert_eq!(
         args(&dotnet_uninstall_command(root, "wix")),
         [

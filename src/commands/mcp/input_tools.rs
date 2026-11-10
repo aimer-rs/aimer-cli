@@ -101,32 +101,65 @@ impl AimerMcpServer {
         description = "Click the left mouse button in the running Aimer app's window. With coordinate [x, y] the mouse glides there first; without it the click happens wherever the mouse already is (it must have been placed by an earlier click, mouse_move or scroll with a coordinate). Coordinates are logical pixels from the window's top-left corner. Needs an attached live session whose app accepts input."
     )]
     fn left_click(&self, Parameters(a): Parameters<ClickArguments>) -> CallToolResult {
-        self.drive("left_click", actions::click(a.at(), PointerButton::Primary, 1))
+        self.drive(
+            "left_click",
+            actions::click(a.at(), PointerButton::Primary, 1),
+        )
     }
 
-    #[tool(name = "right_click", description = "Click the right mouse button, at coordinate [x, y] or, without one, where the mouse already is.")]
+    #[tool(
+        name = "right_click",
+        description = "Click the right mouse button, at coordinate [x, y] or, without one, where the mouse already is."
+    )]
     fn right_click(&self, Parameters(a): Parameters<ClickArguments>) -> CallToolResult {
-        self.drive("right_click", actions::click(a.at(), PointerButton::Secondary, 1))
+        self.drive(
+            "right_click",
+            actions::click(a.at(), PointerButton::Secondary, 1),
+        )
     }
 
-    #[tool(name = "middle_click", description = "Click the middle mouse button, at coordinate [x, y] or, without one, where the mouse already is.")]
+    #[tool(
+        name = "middle_click",
+        description = "Click the middle mouse button, at coordinate [x, y] or, without one, where the mouse already is."
+    )]
     fn middle_click(&self, Parameters(a): Parameters<ClickArguments>) -> CallToolResult {
-        self.drive("middle_click", actions::click(a.at(), PointerButton::Middle, 1))
+        self.drive(
+            "middle_click",
+            actions::click(a.at(), PointerButton::Middle, 1),
+        )
     }
 
-    #[tool(name = "double_click", description = "Double-click the left mouse button, at coordinate [x, y] or, without one, where the mouse already is.")]
+    #[tool(
+        name = "double_click",
+        description = "Double-click the left mouse button, at coordinate [x, y] or, without one, where the mouse already is."
+    )]
     fn double_click(&self, Parameters(a): Parameters<ClickArguments>) -> CallToolResult {
-        self.drive("double_click", actions::click(a.at(), PointerButton::Primary, 2))
+        self.drive(
+            "double_click",
+            actions::click(a.at(), PointerButton::Primary, 2),
+        )
     }
 
-    #[tool(name = "triple_click", description = "Triple-click the left mouse button, at coordinate [x, y] or, without one, where the mouse already is.")]
+    #[tool(
+        name = "triple_click",
+        description = "Triple-click the left mouse button, at coordinate [x, y] or, without one, where the mouse already is."
+    )]
     fn triple_click(&self, Parameters(a): Parameters<ClickArguments>) -> CallToolResult {
-        self.drive("triple_click", actions::click(a.at(), PointerButton::Primary, 3))
+        self.drive(
+            "triple_click",
+            actions::click(a.at(), PointerButton::Primary, 3),
+        )
     }
 
-    #[tool(name = "mouse_move", description = "Glide the mouse pointer to [x, y] in the app's window along a path, as a real mouse would, so what lies on the way sees it pass; use it to hover. The pointer starts from where the last injected mouse event left it.")]
+    #[tool(
+        name = "mouse_move",
+        description = "Glide the mouse pointer to [x, y] in the app's window along a path, as a real mouse would, so what lies on the way sees it pass; use it to hover. The pointer starts from where the last injected mouse event left it."
+    )]
     fn mouse_move(&self, Parameters(a): Parameters<PointArguments>) -> CallToolResult {
-        self.drive("mouse_move", actions::mouse_move(a.coordinate[0], a.coordinate[1]))
+        self.drive(
+            "mouse_move",
+            actions::mouse_move(a.coordinate[0], a.coordinate[1]),
+        )
     }
 
     #[tool(
@@ -144,13 +177,16 @@ impl AimerMcpServer {
         description = "Scroll smoothly, as a trackpad swipe does, by scroll_amount steps of 40 pixels (default 3) in scroll_direction: up, down, left or right. With coordinate the mouse glides there first; without it the scroll happens wherever the mouse already is."
     )]
     fn scroll(&self, Parameters(a): Parameters<ScrollArguments>) -> CallToolResult {
-        let commands = a.scroll_direction.parse::<Direction>().and_then(|direction| {
-            actions::scroll(
-                a.coordinate.map(|c| (c[0], c[1])),
-                direction,
-                a.scroll_amount.unwrap_or(DEFAULT_SCROLL_AMOUNT),
-            )
-        });
+        let commands = a
+            .scroll_direction
+            .parse::<Direction>()
+            .and_then(|direction| {
+                actions::scroll(
+                    a.coordinate.map(|c| (c[0], c[1])),
+                    direction,
+                    a.scroll_amount.unwrap_or(DEFAULT_SCROLL_AMOUNT),
+                )
+            });
         self.drive("scroll", commands)
     }
 
@@ -170,7 +206,10 @@ impl AimerMcpServer {
         self.drive("type", Ok(vec![actions::typing(&a.text)]))
     }
 
-    #[tool(name = "tap", description = "Touch the screen with a finger at [x, y] and lift it, for an app on a phone or tablet.")]
+    #[tool(
+        name = "tap",
+        description = "Touch the screen with a finger at [x, y] and lift it, for an app on a phone or tablet."
+    )]
     fn tap(&self, Parameters(a): Parameters<PointArguments>) -> CallToolResult {
         self.drive("tap", actions::tap(a.coordinate[0], a.coordinate[1]))
     }
@@ -190,7 +229,10 @@ impl AimerMcpServer {
         description = "Pinch at [x, y], multiplying the scale by `scale`: 1.5 zooms in by half, 0.5 zooms out by half."
     )]
     fn pinch(&self, Parameters(a): Parameters<PinchArguments>) -> CallToolResult {
-        self.drive("pinch", actions::pinch(a.coordinate[0], a.coordinate[1], a.scale))
+        self.drive(
+            "pinch",
+            actions::pinch(a.coordinate[0], a.coordinate[1], a.scale),
+        )
     }
 
     #[tool(
@@ -198,7 +240,10 @@ impl AimerMcpServer {
         description = "Take a screenshot of the running app's window, as the app itself drew it: only the app, nothing else on the screen. Returns the picture and its size. By default a pixel in the picture is a logical pixel, so its coordinates can be passed straight to the click, scroll and drag tools; if max_width makes it smaller, the text says what to divide by. Use it to see the result of an action before the next one."
     )]
     fn screenshot(&self, Parameters(a): Parameters<ScreenshotArguments>) -> CallToolResult {
-        let reply = self.request_app("screenshot", json!({ "width": a.max_width, "jpeg": a.jpeg_quality }));
+        let reply = self.request_app(
+            "screenshot",
+            json!({ "width": a.max_width, "jpeg": a.jpeg_quality }),
+        );
         picture_result(reply)
     }
 
@@ -207,7 +252,10 @@ impl AimerMcpServer {
         description = "Send raw aimer_prendre protocol lines to the app, in order, for events the other input tools do not cover: `back start|progress P|invoke|cancel`, `link URL`, `menu undo|redo|cut|copy|paste|select-all`, `file-hover PATH`, `file-hover-cancel`, `file-drop PATH`, `preedit RANGE TEXT`, `soft-backspace`, `touch ...`, `pinch`, `rotate`, `pan`, `quit`. The whole request is checked before anything is sent."
     )]
     fn send_input(&self, Parameters(a): Parameters<RawInputArguments>) -> CallToolResult {
-        encode("send_input", self.request_app("input", json!({ "commands": a.commands })))
+        encode(
+            "send_input",
+            self.request_app("input", json!({ "commands": a.commands })),
+        )
     }
 }
 
@@ -216,7 +264,9 @@ impl AimerMcpServer {
     fn drive(&self, tool: &str, built: Result<Vec<Command>, ActionError>) -> CallToolResult {
         let result = built
             .map_err(|error| anyhow!("{error}"))
-            .and_then(|commands| self.request_app("input", json!({ "commands": wire_lines(&commands) })));
+            .and_then(|commands| {
+                self.request_app("input", json!({ "commands": wire_lines(&commands) }))
+            });
         encode(tool, result)
     }
 
@@ -232,12 +282,23 @@ impl AimerMcpServer {
     }
 
     fn hold_remote(&self) {
-        let Some(client) = self.client.as_ref() else { return };
-        let mut lease = self.remote.lease.lock().expect("remote lease mutex poisoned");
+        let (client, epoch) = self.link.snapshot();
+        let Some(client) = client else { return };
+        let mut lease = self
+            .remote
+            .lease
+            .lock()
+            .expect("remote lease mutex poisoned");
+        // A claim made on a session this connection no longer controls is let go.
+        if lease.as_ref().is_some_and(|(held, _)| *held != epoch) {
+            *lease = None;
+        }
         if lease.is_none() {
             match client.open_lease(&format!("mcp:{}", self.client_id)) {
-                Ok(held) => *lease = Some(held),
-                Err(error) => tracing::debug!(%error, "could not tell the session an agent is remote"),
+                Ok(held) => *lease = Some((epoch, held)),
+                Err(error) => {
+                    tracing::debug!(%error, "could not tell the session an agent is remote")
+                }
             }
         }
     }
@@ -251,17 +312,27 @@ fn picture_result(reply: anyhow::Result<Value>) -> CallToolResult {
         Err(error) => return encode("screenshot", Err(error)),
     };
     let (Some(data), Some(mime)) = (value["data"].as_str(), value["mime"].as_str()) else {
-        return encode("screenshot", Err(anyhow!("the session returned no picture")));
+        return encode(
+            "screenshot",
+            Err(anyhow!("the session returned no picture")),
+        );
     };
-    let (width, height) = (value["width"].as_u64().unwrap_or(0), value["height"].as_u64().unwrap_or(0));
+    let (width, height) = (
+        value["width"].as_u64().unwrap_or(0),
+        value["height"].as_u64().unwrap_or(0),
+    );
     let scale = value["scale"].as_f64().unwrap_or(1.0);
     let mapping = if (scale - 1.0).abs() < 0.01 {
         "one pixel in the picture is one logical pixel, so its coordinates can be used with the input tools as they are".to_owned()
     } else {
-        format!("divide a coordinate in the picture by {scale:.3} to get the coordinate the input tools take")
+        format!(
+            "divide a coordinate in the picture by {scale:.3} to get the coordinate the input tools take"
+        )
     };
     CallToolResult::success(vec![
-        ContentBlock::text(format!("Screenshot of the app window, {width} x {height} pixels: {mapping}.")),
+        ContentBlock::text(format!(
+            "Screenshot of the app window, {width} x {height} pixels: {mapping}."
+        )),
         ContentBlock::image(data, mime),
     ])
 }
@@ -279,7 +350,10 @@ mod tests {
     #[test]
     fn every_input_tool_controls_the_running_app() {
         let tools = AimerMcpServer::input_tool_router().list_all();
-        assert!(tools.len() >= 14, "the computer-use set plus touch and raw input");
+        assert!(
+            tools.len() >= 14,
+            "the computer-use set plus touch and raw input"
+        );
         for tool in tools {
             assert_eq!(access_class(&tool.name), Access::Session, "{}", tool.name);
         }
@@ -302,7 +376,10 @@ mod tests {
             "key",
             "type",
         ] {
-            assert!(names.iter().any(|name| name == expected), "missing {expected}");
+            assert!(
+                names.iter().any(|name| name == expected),
+                "missing {expected}"
+            );
         }
     }
 
@@ -310,18 +387,32 @@ mod tests {
     fn a_screenshot_is_an_image_block_and_a_line_on_how_to_read_it() {
         let reply = json!({ "mime": "image/png", "width": 1150, "height": 800, "scale": 1.0, "data": "iVBORw0KGgo=" });
         let result = picture_result(Ok(reply));
-        assert_ne!(result.is_error, Some(true), "a success, not an error result");
+        assert_ne!(
+            result.is_error,
+            Some(true),
+            "a success, not an error result"
+        );
         assert_eq!(result.content.len(), 2);
         let image = result.content[1].as_image().expect("the picture");
-        assert_eq!((image.mime_type.as_str(), image.data.as_str()), ("image/png", "iVBORw0KGgo="));
+        assert_eq!(
+            (image.mime_type.as_str(), image.data.as_str()),
+            ("image/png", "iVBORw0KGgo=")
+        );
         let note = result.content[0].as_text().expect("a note").text.clone();
-        assert!(note.contains("1150 x 800") && note.contains("as they are"), "{note}");
+        assert!(
+            note.contains("1150 x 800") && note.contains("as they are"),
+            "{note}"
+        );
     }
 
     #[test]
     fn a_smaller_picture_says_what_to_divide_by() {
         let reply = json!({ "mime": "image/jpeg", "width": 800, "height": 557, "scale": 0.6956, "data": "AA==" });
-        let note = picture_result(Ok(reply)).content[0].as_text().expect("a note").text.clone();
+        let note = picture_result(Ok(reply)).content[0]
+            .as_text()
+            .expect("a note")
+            .text
+            .clone();
         assert!(note.contains("divide") && note.contains("0.696"), "{note}");
     }
 
@@ -334,16 +425,24 @@ mod tests {
     #[test]
     fn a_click_is_sent_as_the_wire_lines_of_its_commands() {
         let click = actions::click(Some((10.0, 20.0)), PointerButton::Primary, 1).expect("valid");
-        assert_eq!(wire_lines(&click), ["glide 10 20", "down 10 20 primary", "up 10 20 primary"]);
+        assert_eq!(
+            wire_lines(&click),
+            ["glide 10 20", "down 10 20 primary", "up 10 20 primary"]
+        );
     }
 
     #[test]
     fn a_click_without_a_coordinate_is_where_the_mouse_is() {
-        let args: ClickArguments = serde_json::from_value(json!({})).expect("the coordinate is optional");
+        let args: ClickArguments =
+            serde_json::from_value(json!({})).expect("the coordinate is optional");
         assert_eq!(args.at(), None);
-        let args: ClickArguments = serde_json::from_value(json!({ "coordinate": [3, 4] })).expect("given");
+        let args: ClickArguments =
+            serde_json::from_value(json!({ "coordinate": [3, 4] })).expect("given");
         assert_eq!(args.at(), Some((3.0, 4.0)));
         let click = actions::click(None, PointerButton::Primary, 2).expect("valid");
-        assert_eq!(wire_lines(&click), ["down primary", "up primary", "down primary", "up primary"]);
+        assert_eq!(
+            wire_lines(&click),
+            ["down primary", "up primary", "down primary", "up primary"]
+        );
     }
 }

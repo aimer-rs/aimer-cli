@@ -33,14 +33,25 @@ pub struct ScreenshotArgs {
 
 /// Where the picture goes when `--output` is not given.
 fn default_output(jpeg: bool) -> PathBuf {
-    PathBuf::from(if jpeg { "aimer-screenshot.jpg" } else { "aimer-screenshot.png" })
+    PathBuf::from(if jpeg {
+        "aimer-screenshot.jpg"
+    } else {
+        "aimer-screenshot.png"
+    })
 }
 
 /// Run `aimer screenshot`.
 pub fn execute(args: &ScreenshotArgs) -> anyhow::Result<()> {
-    let output = args.output.clone().unwrap_or_else(|| default_output(args.jpeg.is_some()));
+    let output = args
+        .output
+        .clone()
+        .unwrap_or_else(|| default_output(args.jpeg.is_some()));
     // The run session writes the file, from its own working directory.
-    let output = if output.is_absolute() { output } else { std::env::current_dir()?.join(output) };
+    let output = if output.is_absolute() {
+        output
+    } else {
+        std::env::current_dir()?.join(output)
+    };
     let client = super::input::connect(args.session, args.project.clone())?;
     let reply = client
         .request(
@@ -78,7 +89,8 @@ mod tests {
 
     #[test]
     fn the_options_are_read() {
-        let cli = Cli::try_parse_from(["shot", "-o", "out.png", "--width", "800", "--jpeg", "70"]).unwrap();
+        let cli = Cli::try_parse_from(["shot", "-o", "out.png", "--width", "800", "--jpeg", "70"])
+            .unwrap();
         assert_eq!((cli.shot.width, cli.shot.jpeg), (Some(800), Some(70)));
         assert_eq!(cli.shot.output, Some(PathBuf::from("out.png")));
     }
@@ -86,7 +98,10 @@ mod tests {
     #[test]
     fn a_jpeg_quality_outside_one_to_a_hundred_is_refused() {
         for quality in ["0", "101", "x"] {
-            assert!(Cli::try_parse_from(["shot", "--jpeg", quality]).is_err(), "{quality}");
+            assert!(
+                Cli::try_parse_from(["shot", "--jpeg", quality]).is_err(),
+                "{quality}"
+            );
         }
     }
 

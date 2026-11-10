@@ -82,10 +82,26 @@ fn artifacts_are_looked_for_where_cargo_was_told_to_put_them() {
     use std::ffi::OsString;
     use std::path::Path;
     let root = Path::new("/work/app");
-    assert_eq!(target_dir_in(root, None), Path::new("/work/app/target"), "cargo's default");
-    assert_eq!(target_dir_in(root, Some(OsString::new())), Path::new("/work/app/target"), "an empty value is no value");
-    assert_eq!(target_dir_in(root, Some("/elsewhere/build".into())), Path::new("/elsewhere/build"), "CARGO_TARGET_DIR wins");
-    assert_eq!(target_dir_in(root, Some("agent_target".into())), Path::new("/work/app/agent_target"), "a relative one is the project's");
+    assert_eq!(
+        target_dir_in(root, None),
+        Path::new("/work/app/target"),
+        "cargo's default"
+    );
+    assert_eq!(
+        target_dir_in(root, Some(OsString::new())),
+        Path::new("/work/app/target"),
+        "an empty value is no value"
+    );
+    assert_eq!(
+        target_dir_in(root, Some("/elsewhere/build".into())),
+        Path::new("/elsewhere/build"),
+        "CARGO_TARGET_DIR wins"
+    );
+    assert_eq!(
+        target_dir_in(root, Some("agent_target".into())),
+        Path::new("/work/app/agent_target"),
+        "a relative one is the project's"
+    );
 }
 
 #[test]

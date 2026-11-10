@@ -9,16 +9,8 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use toml::{Table as TomlTable, Value as TomlValue};
 use uuid::Uuid;
 
-/// Selects whether an agent registration is user-wide or project-specific.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum InstallScope {
-    /// Register `aimer mcp` without binding it to a project. The running MCP
-    /// adapter discovers the nearest `Aimer.toml` or `Cargo.toml` from its working directory.
-    Global,
-    /// Register the adapter with an explicit project root (or a descendant of
-    /// one containing `Aimer.toml` or `Cargo.toml`).
-    Project(PathBuf),
-}
+use super::agent_list::{self, AgentRow};
+use super::mcp_agents::{self, ConfigKind, McpAgent};
 
 /// Describes one agent configuration updated by an installation.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,21 +32,20 @@ pub enum ConfigFormat {
     Toml,
 }
 
-/// Render Aimer's stdio MCP entry without writing any agent configuration.
-pub fn render_config(format: ConfigFormat, scope: InstallScope) -> Result<String> {
+/// Render Aimer's global stdio MCP entry without writing any agent configuration.
+///
+/// The entry is not bound to a project: the running MCP adapter discovers the
+/// nearest `Aimer.toml` or `Cargo.toml` from its working directory.
+pub fn render_config(format: ConfigFormat) -> Result<String> {
     let executable = std::env::current_exe()
         .context("cannot determine the aimer executable")?
         .canonicalize()
         .context("cannot resolve the aimer executable")?;
-    render_config_at(format, scope, &executable)
+    render_config_at(format, &executable)
 }
 
-fn render_config_at(
-    format: ConfigFormat,
-    scope: InstallScope,
-    executable: &Path,
-) -> Result<String> {
-    let args = scope_args(scope)?;
+fn render_config_at(format: ConfigFormat, executable: &Path) -> Result<String> {
+    let args = command_args();
     let command = executable.display().to_string();
     match format {
         ConfigFormat::Json => {
@@ -79,27 +70,18 @@ fn render_config_at(
     }
 }
 
-fn scope_args(scope: InstallScope) -> Result<Vec<String>> {
-    let project = match scope {
-        InstallScope::Global => None,
-        InstallScope::Project(path) => Some(discover_project_root(&path)?),
-    };
-    Ok(command_args(project.as_deref()))
-}
-
-/// Install Aimer's stdio MCP entry in the requested agent configurations.
-pub fn install(agents: &[String], scope: InstallScope) -> Result<Vec<InstallReport>> {
+/// Install Aimer's global stdio MCP entry in the requested agent configurations.
+pub fn install(agents: &[String]) -> Result<Vec<InstallReport>> {
     let home = dirs::home_dir().context("cannot determine the user home directory")?;
     let executable = std::env::current_exe()
         .context("cannot determine the aimer executable")?
         .canonicalize()
         .context("cannot resolve the aimer executable")?;
-    install_at(agents, scope, &home, &executable, true)
+    install_at(agents, &home, &executable, true)
 }
 
 fn install_at(
     agents: &[String],
-    scope: InstallScope,
     home: &Path,
     executable: &Path,
     honor_codex_home: bool,
@@ -110,19 +92,22 @@ fn install_at(
 
     let agents = agents
         .iter()
-        .map(|agent| Agent::parse(agent))
+        .map(|agent| parse_agent(agent))
         .collect::<Result<Vec<_>>>()?;
-    let args = scope_args(scope)?;
+    let args = command_args();
+    let command = executable.display().to_string();
 
     let mut reports = Vec::with_capacity(agents.len());
     for agent in agents {
         let path = agent.config_path(home, honor_codex_home);
-        let changed = match agent {
-            Agent::Codex => install_toml(&path, executable, &args)?,
-            Agent::Claude | Agent::Cursor => install_json(&path, executable, &args)?,
+        let changed = match agent.kind {
+            ConfigKind::Toml => install_toml(&path, executable, &args)?,
+            ConfigKind::Json { servers_key, entry } => {
+                install_json(&path, servers_key, &entry.fields(&command, &args))?
+            }
         };
         reports.push(InstallReport {
-            agent: agent.name().to_string(),
+            agent: agent.name.to_string(),
             path,
             changed,
         });
@@ -130,58 +115,37 @@ fn install_at(
     Ok(reports)
 }
 
-fn command_args(project: Option<&Path>) -> Vec<String> {
-    let mut args = vec!["mcp".to_string()];
-    if let Some(project) = project {
-        args.push("--project".to_string());
-        args.push(project.display().to_string());
-    }
-    args
+fn command_args() -> Vec<String> {
+    vec!["mcp".to_string()]
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Agent {
-    Codex,
-    Claude,
-    Cursor,
+/// List the agents accepted by `aimer mcp --install`.
+pub fn list_agents() -> String {
+    let rows = mcp_agents::AGENTS
+        .iter()
+        .map(|agent| {
+            AgentRow::new(
+                agent.name,
+                agent.aliases,
+                agent.label,
+                format!("~/{}", agent.config),
+            )
+        })
+        .collect::<Vec<_>>();
+    agent_list::render(
+        "Agents supported by `aimer mcp --install`:",
+        "aimer mcp --install <AGENT>[,<AGENT>...]",
+        &rows,
+    )
 }
 
-impl Agent {
-    fn parse(value: &str) -> Result<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "codex" => Ok(Self::Codex),
-            "claude" | "claude-code" => Ok(Self::Claude),
-            "cursor" => Ok(Self::Cursor),
-            other => Err(anyhow!(
-                "unsupported MCP agent '{other}'; supported agents: codex, claude, cursor"
-            )),
-        }
-    }
-
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Cursor => "cursor",
-        }
-    }
-
-    fn config_path(self, home: &Path, honor_codex_home: bool) -> PathBuf {
-        match self {
-            Self::Codex => {
-                let root = if honor_codex_home {
-                    std::env::var_os("CODEX_HOME")
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| home.join(".codex"))
-                } else {
-                    home.join(".codex")
-                };
-                root.join("config.toml")
-            }
-            Self::Claude => home.join(".claude.json"),
-            Self::Cursor => home.join(".cursor/mcp.json"),
-        }
-    }
+fn parse_agent(value: &str) -> Result<&'static McpAgent> {
+    mcp_agents::find(value).ok_or_else(|| {
+        anyhow!(
+            "unsupported MCP agent '{}'; run `aimer mcp --install` without an agent to list the supported agents",
+            value.trim().to_ascii_lowercase()
+        )
+    })
 }
 
 pub(crate) fn discover_project_root(start: &Path) -> Result<PathBuf> {
@@ -257,7 +221,11 @@ fn install_toml(path: &Path, executable: &Path, args: &[String]) -> Result<bool>
     write_if_changed(path, contents.as_bytes())
 }
 
-fn install_json(path: &Path, executable: &Path, args: &[String]) -> Result<bool> {
+fn install_json(
+    path: &Path,
+    servers_key: &str,
+    fields: &[(&'static str, JsonValue)],
+) -> Result<bool> {
     let mut document = if path.exists() {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("reading MCP configuration '{}'", path.display()))?;
@@ -274,26 +242,29 @@ fn install_json(path: &Path, executable: &Path, args: &[String]) -> Result<bool>
         )
     })?;
     let servers = root
-        .entry("mcpServers")
+        .entry(servers_key)
         .or_insert_with(|| JsonValue::Object(JsonMap::new()))
         .as_object_mut()
-        .ok_or_else(|| anyhow!("'mcpServers' in '{}' must be a JSON object", path.display()))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "'{servers_key}' in '{}' must be a JSON object",
+                path.display()
+            )
+        })?;
     let server = servers
         .entry("aimer")
         .or_insert_with(|| JsonValue::Object(JsonMap::new()))
         .as_object_mut()
         .ok_or_else(|| {
             anyhow!(
-                "'mcpServers.aimer' in '{}' must be a JSON object",
+                "'{servers_key}.aimer' in '{}' must be a JSON object",
                 path.display()
             )
         })?;
 
-    server.insert(
-        "command".to_string(),
-        JsonValue::String(executable.display().to_string()),
-    );
-    server.insert("args".to_string(), json!(args));
+    for (key, value) in fields {
+        server.insert((*key).to_string(), value.clone());
+    }
 
     let contents = serde_json::to_vec_pretty(&document)
         .with_context(|| format!("serializing MCP configuration '{}'", path.display()))?;
@@ -365,13 +336,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let executable = Path::new("/opt/aimer/bin/aimer");
 
-        let reports = install_in(
-            &["codex".to_string()],
-            InstallScope::Global,
-            home.path(),
-            executable,
-        )
-        .unwrap();
+        let reports = install_in(&["codex".to_string()], home.path(), executable).unwrap();
 
         assert_eq!(reports.len(), 1);
         let config: toml::Value =
@@ -388,62 +353,6 @@ mod tests {
     }
 
     #[test]
-    fn project_install_persists_canonical_project_path() {
-        let home = tempfile::tempdir().unwrap();
-        let project = home.path().join("projects/demo");
-        fs::create_dir_all(&project).unwrap();
-        fs::write(project.join("Aimer.toml"), "[package]\nname = \"demo\"\n").unwrap();
-
-        install_in(
-            &["codex".to_string()],
-            InstallScope::Project(project.clone()),
-            home.path(),
-            Path::new("/opt/aimer/bin/aimer"),
-        )
-        .unwrap();
-
-        let config: toml::Value =
-            toml::from_str(&fs::read_to_string(home.path().join(".codex/config.toml")).unwrap())
-                .unwrap();
-        assert_eq!(
-            config["mcp_servers"]["aimer"]["args"],
-            TomlValue::Array(vec![
-                TomlValue::String("mcp".to_string()),
-                TomlValue::String("--project".to_string()),
-                TomlValue::String(project.canonicalize().unwrap().display().to_string()),
-            ])
-        );
-    }
-
-    #[test]
-    fn rust_project_install_persists_canonical_project_path() {
-        let home = tempfile::tempdir().unwrap();
-        let project = home.path().join("projects/rust-demo");
-        fs::create_dir_all(project.join("src")).unwrap();
-        fs::write(project.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
-
-        install_in(
-            &["claude".to_string()],
-            InstallScope::Project(project.clone()),
-            home.path(),
-            Path::new("/opt/aimer/bin/aimer"),
-        )
-        .unwrap();
-
-        let config: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(home.path().join(".claude.json")).unwrap())
-                .unwrap();
-        assert_eq!(
-            config["mcpServers"]["aimer"]["args"],
-            serde_json::json!([
-                "mcp",
-                "--project",
-                project.canonicalize().unwrap().display().to_string()
-            ])
-        );
-    }
-
-    #[test]
     fn install_preserves_other_servers_and_is_idempotent() {
         let home = tempfile::tempdir().unwrap();
         let config_dir = home.path().join(".codex");
@@ -456,14 +365,12 @@ mod tests {
 
         let first = install_in(
             &["codex".to_string()],
-            InstallScope::Global,
             home.path(),
             Path::new("/opt/aimer/bin/aimer"),
         )
         .unwrap();
         let second = install_in(
             &["codex".to_string()],
-            InstallScope::Global,
             home.path(),
             Path::new("/opt/aimer/bin/aimer"),
         )
@@ -488,7 +395,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let reports = install_in(
             &["claude".to_string(), "cursor".to_string()],
-            InstallScope::Global,
             home.path(),
             Path::new("/opt/aimer/bin/aimer"),
         )
@@ -516,7 +422,7 @@ mod tests {
     fn rendered_json_matches_the_installed_entry_without_writing() {
         let executable = Path::new("/opt/aimer/bin/aimer");
 
-        let text = render_config_at(ConfigFormat::Json, InstallScope::Global, executable).unwrap();
+        let text = render_config_at(ConfigFormat::Json, executable).unwrap();
 
         let config: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
@@ -526,18 +432,8 @@ mod tests {
     }
 
     #[test]
-    fn rendered_toml_binds_the_canonical_project() {
-        let home = tempfile::tempdir().unwrap();
-        let project = home.path().join("demo");
-        fs::create_dir_all(&project).unwrap();
-        fs::write(project.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
-
-        let text = render_config_at(
-            ConfigFormat::Toml,
-            InstallScope::Project(project.clone()),
-            Path::new("/opt/aimer/bin/aimer"),
-        )
-        .unwrap();
+    fn rendered_toml_is_not_bound_to_a_project() {
+        let text = render_config_at(ConfigFormat::Toml, Path::new("/opt/aimer/bin/aimer")).unwrap();
 
         let config: toml::Value = toml::from_str(&text).unwrap();
         assert_eq!(
@@ -546,12 +442,110 @@ mod tests {
         );
         assert_eq!(
             config["mcp_servers"]["aimer"]["args"],
-            TomlValue::Array(vec![
-                TomlValue::String("mcp".to_string()),
-                TomlValue::String("--project".to_string()),
-                TomlValue::String(project.canonicalize().unwrap().display().to_string()),
-            ])
+            TomlValue::Array(vec![TomlValue::String("mcp".to_string())])
         );
+    }
+
+    #[test]
+    fn agents_use_their_own_config_file_and_entry_shape() {
+        let home = tempfile::tempdir().unwrap();
+        let agents = [
+            "gemini-cli",
+            "opencode",
+            "github-copilot",
+            "amp",
+            "droid",
+            "junie",
+        ]
+        .map(str::to_string)
+        .to_vec();
+
+        let reports = install_in(&agents, home.path(), Path::new("/opt/aimer/bin/aimer")).unwrap();
+
+        assert_eq!(reports.len(), 6);
+        let read = |relative: &str| -> serde_json::Value {
+            serde_json::from_str(&fs::read_to_string(home.path().join(relative)).unwrap()).unwrap()
+        };
+        let standard = serde_json::json!({ "command": "/opt/aimer/bin/aimer", "args": ["mcp"] });
+        assert_eq!(
+            read(".gemini/settings.json")["mcpServers"]["aimer"],
+            standard
+        );
+        assert_eq!(read(".junie/mcp/mcp.json")["mcpServers"]["aimer"], standard);
+        assert_eq!(
+            read(".config/amp/settings.json")["amp.mcpServers"]["aimer"],
+            standard
+        );
+        assert_eq!(
+            read(".config/opencode/opencode.json")["mcp"]["aimer"],
+            serde_json::json!({
+                "type": "local",
+                "command": ["/opt/aimer/bin/aimer", "mcp"],
+                "enabled": true
+            })
+        );
+        assert_eq!(
+            read(".copilot/mcp-config.json")["mcpServers"]["aimer"],
+            serde_json::json!({
+                "type": "local",
+                "command": "/opt/aimer/bin/aimer",
+                "args": ["mcp"],
+                "tools": ["*"]
+            })
+        );
+        assert_eq!(
+            read(".factory/mcp.json")["mcpServers"]["aimer"]["type"],
+            "stdio"
+        );
+    }
+
+    #[test]
+    fn json_install_keeps_other_settings_and_servers() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(".gemini/settings.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"theme":"dark","mcpServers":{"keep":{"command":"keep"}}}"#,
+        )
+        .unwrap();
+
+        install_in(
+            &["gemini-cli".to_string()],
+            home.path(),
+            Path::new("/opt/aimer/bin/aimer"),
+        )
+        .unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["theme"], "dark");
+        assert_eq!(config["mcpServers"]["keep"]["command"], "keep");
+        assert_eq!(
+            config["mcpServers"]["aimer"]["args"],
+            serde_json::json!(["mcp"])
+        );
+    }
+
+    #[test]
+    fn agent_names_and_aliases_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for agent in mcp_agents::AGENTS {
+            for name in std::iter::once(&agent.name).chain(agent.aliases) {
+                assert!(seen.insert(*name), "duplicate agent identifier {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn listing_shows_every_agent_with_its_config_path() {
+        let text = list_agents();
+
+        for agent in mcp_agents::AGENTS {
+            assert!(text.contains(agent.name), "{} missing", agent.name);
+        }
+        assert!(text.contains("claude (claude-code)"));
+        assert!(text.contains("~/.cursor/mcp.json"));
     }
 
     #[test]
@@ -559,7 +553,6 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let error = install_in(
             &["unknown-agent".to_string()],
-            InstallScope::Global,
             home.path(),
             Path::new("/opt/aimer/bin/aimer"),
         )
@@ -570,12 +563,7 @@ mod tests {
         assert!(!home.path().join(".codex/config.toml").exists());
     }
 
-    fn install_in(
-        agents: &[String],
-        scope: InstallScope,
-        home: &Path,
-        executable: &Path,
-    ) -> Result<Vec<InstallReport>> {
-        install_at(agents, scope, home, executable, false)
+    fn install_in(agents: &[String], home: &Path, executable: &Path) -> Result<Vec<InstallReport>> {
+        install_at(agents, home, executable, false)
     }
 }

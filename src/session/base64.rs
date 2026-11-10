@@ -12,8 +12,16 @@ pub(crate) fn encode(bytes: &[u8]) -> String {
             | u32::from(*chunk.get(2).unwrap_or(&0));
         out.push(ALPHABET[(n >> 18) as usize & 63] as char);
         out.push(ALPHABET[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -41,7 +49,11 @@ mod tests {
     fn every_byte_value_uses_only_the_alphabet() {
         let all: Vec<u8> = (0..=255).collect();
         let encoded = encode(&all);
-        assert!(encoded.bytes().all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b)));
+        assert!(
+            encoded
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+        );
         assert_eq!(encoded.len(), 256usize.div_ceil(3) * 4);
     }
 

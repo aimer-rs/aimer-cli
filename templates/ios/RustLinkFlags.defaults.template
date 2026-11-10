@@ -1,0 +1,20 @@
+# The linker flags a freshly scaffolded iOS project starts with, one per line.
+# Blank lines and lines starting with `#` are ignored. They are used until the
+# first iOS build replaces them with the answer of `rustc --print native-static-libs`.
+#
+# This is deliberately the union of what an empty Aimer app needs: enough to
+# link the renderer, the windowing layer and the native bindings the umbrella
+# `aimer` crate re-exports.
+-framework UIKit
+-framework Metal
+-framework MetalKit
+-framework CoreVideo
+-framework CoreGraphics
+-framework CoreText
+-framework CoreFoundation
+-framework CoreHaptics
+-framework Foundation
+-framework QuartzCore
+-framework Security
+-lobjc
+-lc++

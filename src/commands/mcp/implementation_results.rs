@@ -656,7 +656,10 @@ mod tests {
             implementation_page(root.path(), &raw, Some("Drawable"), 1, 0, None, false).unwrap();
 
         assert_eq!(result["total_results"], 2);
-        assert_eq!(result["results"][0]["header"].as_str().unwrap(), "impl Drawable for Zed");
+        assert_eq!(
+            result["results"][0]["header"].as_str().unwrap(),
+            "impl Drawable for Zed"
+        );
         assert_eq!(result["results"][0]["crate"], "aimer_widget");
         assert_eq!(result["truncated"], true);
     }

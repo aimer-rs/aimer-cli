@@ -167,7 +167,20 @@ fn offered(connected: bool) -> Vec<String> {
 #[test]
 fn without_a_connected_app_the_tools_that_drive_it_are_not_listed() {
     let names = offered(false);
-    for tool in ["left_click", "right_click", "double_click", "mouse_move", "scroll", "key", "type", "tap", "swipe", "pinch", "send_input", "screenshot"] {
+    for tool in [
+        "left_click",
+        "right_click",
+        "double_click",
+        "mouse_move",
+        "scroll",
+        "key",
+        "type",
+        "tap",
+        "swipe",
+        "pinch",
+        "send_input",
+        "screenshot",
+    ] {
         assert!(!names.iter().any(|n| n == tool), "{tool} needs an app");
     }
 }
@@ -178,8 +191,18 @@ fn the_tools_that_do_not_need_an_app_are_always_listed() {
     // its app, and on none at all.
     for connected in [false, true] {
         let names = offered(connected);
-        for tool in ["restart_project", "stop_project", "get_logs", "cargo_check", "find_definition", "search_text"] {
-            assert!(names.iter().any(|n| n == tool), "{tool} (connected: {connected})");
+        for tool in [
+            "restart_project",
+            "stop_project",
+            "get_logs",
+            "cargo_check",
+            "find_definition",
+            "search_text",
+        ] {
+            assert!(
+                names.iter().any(|n| n == tool),
+                "{tool} (connected: {connected})"
+            );
         }
     }
 }
@@ -194,7 +217,31 @@ fn with_a_connected_app_every_tool_is_listed() {
 
 #[test]
 fn the_app_tools_are_exactly_the_input_tools() {
-    let input: HashSet<String> = AimerMcpServer::input_tool_router().list_all().into_iter().map(|t| t.name.to_string()).collect();
+    let input: HashSet<String> = AimerMcpServer::input_tool_router()
+        .list_all()
+        .into_iter()
+        .map(|t| t.name.to_string())
+        .collect();
     assert_eq!(&input, app_tool_names());
     assert!(!input.is_empty());
+}
+
+#[test]
+fn the_session_tools_are_listed_with_or_without_an_app() {
+    for connected in [false, true] {
+        let names = offered(connected);
+        for tool in ["list_sessions", "attach_session", "detach_session"] {
+            assert!(
+                names.iter().any(|n| n == tool),
+                "{tool} (connected: {connected})"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_session_tools_only_change_this_connection_so_they_do_not_wait_for_other_agents() {
+    for tool in ["list_sessions", "attach_session", "detach_session"] {
+        assert_eq!(access_class(tool), access::Access::Read, "{tool}");
+    }
 }

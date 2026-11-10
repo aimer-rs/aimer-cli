@@ -9,10 +9,10 @@ use crate::commands::run::cargo_build::{
     stream_stdout_as_app_log,
 };
 use crate::commands::run::console::{RunnerEvent, Status};
-use crate::commands::run::input_launch;
 use crate::commands::run::helpers::{
     ConsoleReporter, build_log, fail, run_to_completion, set_status, spawn_streamed,
 };
+use crate::commands::run::input_launch;
 use crate::commands::run::pipeline::{Flow, RunContext, Runner};
 use crate::consts::{JSON_OUTPUT_ENV, JSON_OUTPUT_FLAG};
 
@@ -141,7 +141,10 @@ impl Runner for IosRunner {
             match input_launch::device_address(&ctx.device.id) {
                 Some(ip) => input_launch::enable(ctx, Some(ip)),
                 None => {
-                    build_log(&ctx.tx, "Input: the device reports no tunnel address, so it cannot be driven.");
+                    build_log(
+                        &ctx.tx,
+                        "Input: the device reports no tunnel address, so it cannot be driven.",
+                    );
                     Vec::new()
                 }
             }

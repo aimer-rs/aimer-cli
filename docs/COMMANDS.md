@@ -563,12 +563,30 @@ Upgrades existing platform build scaffolds (`builds/<platform>/`) to the latest 
 version while preserving your project settings and code.
 
 ```bash
-aimer migrate <TARGET>
+aimer migrate <TARGET> [--force]
 ```
 
 **Arguments:**
 
 - `<TARGET>`: Platform to migrate (`macos`, `windows`, `linux`, `android`, `ios`, `web`, or `all`).
+
+**Options:**
+
+- `--force`: Also replace the scaffold files you may have edited (see below).
+
+The latest scaffold is merged into `builds/<platform>/`; nothing is deleted. For each file of the scaffold:
+
+- A file the project does not have yet is **added**.
+- A file identical to the latest template is left alone.
+- **Generated code** is always **refreshed**: `main.swift`, `AimerActivity.kt`, and the Gradle wrapper
+  (`gradlew`, `gradlew.bat`, `gradle-wrapper.jar`, `gradle-wrapper.properties`).
+- Any other file that differs from the template is treated as yours and **kept**. That covers `Info.plist`,
+  `project.pbxproj` (signing team, bundle identifier), `AndroidManifest.xml`, `res/`, `build.gradle.kts`, icons,
+  `Trunk.toml`, `index.html` and `RustLinkFlags.xcconfig`. The command lists these files so you can compare them with
+  a freshly scaffolded project; `--force` replaces them with the latest template.
+
+Files that are not part of the scaffold (build output such as `pkg/`, keystores, files you added) are never touched,
+with or without `--force`.
 
 ---
 
@@ -600,12 +618,13 @@ adapter discovers the nearest `Aimer.toml` or `Cargo.toml` from its working dire
 specific live Aimer session when the project has more than one.
 
 ```bash
-# Install MCP into AI agents:
-aimer mcp --install <claude|cursor|codex> [--global] [--project <PATH>]
+# Install MCP globally into AI agents (not bound to any project):
+# (run without an agent to list the supported agents):
+aimer mcp --install [<AGENT>[,<AGENT>...]]
 
-# Print the config entry to stdout without installing it
+# Print the global config entry to stdout without installing it
 # (--json for Claude Code / Cursor, --toml for Codex):
-aimer mcp <--json|--toml> [--global] [--project <PATH>]
+aimer mcp <--json|--toml>
 
 # Run the MCP stdio adapter. By default it shares one analysis engine with
 # other agents on the same workspace; --standalone keeps it in this process.
@@ -619,15 +638,21 @@ See [Model Context Protocol (MCP) Integration](MCP.md) for supported agents and 
 
 ## `aimer skill`
 
-Install or update Aimer's Rust workflow skill in the selected agent's user-level skills directory.
+Install or update Aimer's workflow skills in the selected agent's user-level skills directory.
 
 ```bash
-aimer skill --install <codex|claude|cursor> [<AGENT> ...]
+aimer skill --install [<AGENT>[,<AGENT>...]]
 ```
 
-For example, `aimer skill --install claude,codex` installs it for Claude Code and Codex. The command installs
-`aimer-rust/SKILL.md`; its MCP tool list is generated from the server's `tools/list` response by
-`scripts/update_aimer_rust_skill.py`.
+Run `aimer skill --install` without an agent to list every supported agent and its skills directory (the agents and
+global paths of the [Vercel skills agent list](https://github.com/vercel-labs/skills/blob/26dc8e4755a11fea22ed788256c3db50001b013d/docs/agents.md)).
+For example, `aimer skill --install claude,codex` installs them for Claude Code and Codex. The command installs two
+skills for each agent:
+
+- `aimer-app/SKILL.md`: remotely run, drive, and observe a live Aimer app (screenshots, mouse, keyboard and touch
+  input, logs, restart, resource usage).
+- `aimer-rust/SKILL.md`: Rust code search, navigation, diagnostics, and preview-based edits. Its MCP tool list is
+  generated from the server's `tools/list` response by `scripts/update_aimer_rust_skill.py`.
 
 ---
 

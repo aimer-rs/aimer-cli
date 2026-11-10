@@ -11,7 +11,9 @@ fn handle() -> SessionHandle {
 }
 
 fn announcement(addr: &str, token: &str) -> String {
-    Endpoint::new(addr.parse().expect("addr"), token).expect("endpoint").announcement()
+    Endpoint::new(addr.parse().expect("addr"), token)
+        .expect("endpoint")
+        .announcement()
 }
 
 #[test]
@@ -19,10 +21,21 @@ fn the_launch_environment_switches_the_server_on_with_our_token() {
     let route = InputRoute::new(None);
     let vars = route.environment();
     assert!(vars.contains(&(env::ENABLE, "1".to_owned())));
-    let token = vars.iter().find(|(k, _)| *k == env::TOKEN).map(|(_, v)| v.clone()).expect("a token");
+    let token = vars
+        .iter()
+        .find(|(k, _)| *k == env::TOKEN)
+        .map(|(_, v)| v.clone())
+        .expect("a token");
     assert_eq!(token.len(), 32, "128 bits as hex");
-    assert!(vars.iter().all(|(k, _)| *k != env::BIND), "an app on this machine stays on loopback");
-    assert_ne!(token, InputRoute::new(None).environment()[1].1, "every run has its own token");
+    assert!(
+        vars.iter().all(|(k, _)| *k != env::BIND),
+        "an app on this machine stays on loopback"
+    );
+    assert_ne!(
+        token,
+        InputRoute::new(None).environment()[1].1,
+        "every run has its own token"
+    );
 }
 
 #[test]
@@ -49,7 +62,10 @@ fn the_announcement_is_found_in_a_json_log_line_and_the_address_is_replaced() {
 #[test]
 fn an_announcement_with_another_token_is_not_ours() {
     let route = InputRoute::new(None);
-    assert_eq!(route.endpoint_in(&announcement("127.0.0.1:4001", "someone-elses")), None);
+    assert_eq!(
+        route.endpoint_in(&announcement("127.0.0.1:4001", "someone-elses")),
+        None
+    );
     assert_eq!(route.endpoint_in("window ready"), None);
 }
 
@@ -69,10 +85,19 @@ fn input_is_refused_with_a_reason_until_the_app_has_announced_itself() {
 fn a_bad_line_stops_the_request_before_anything_is_sent() {
     let session = handle();
     session.prepare_input(InputRoute::new(None));
-    let err = session.send_input(json!({ "commands": ["move 1 2", "teleport 3 4"] })).unwrap_err();
-    assert!(err.contains("teleport 3 4") && err.contains("unknown command"), "{err}");
+    let err = session
+        .send_input(json!({ "commands": ["move 1 2", "teleport 3 4"] }))
+        .unwrap_err();
+    assert!(
+        err.contains("teleport 3 4") && err.contains("unknown command"),
+        "{err}"
+    );
     assert!(session.send_input(json!({ "commands": [] })).is_err());
-    assert!(session.send_input(json!({ "commands": vec!["leave"; MAX_COMMANDS + 1] })).is_err());
+    assert!(
+        session
+            .send_input(json!({ "commands": vec!["leave"; MAX_COMMANDS + 1] }))
+            .is_err()
+    );
     assert!(session.send_input(json!({ "nonsense": true })).is_err());
 }
 
@@ -94,18 +119,27 @@ fn a_session_is_connected_to_its_app_only_once_it_has_reached_it() {
 
     let route = InputRoute::new(None);
     session.prepare_input(route.clone());
-    assert!(!session.snapshot().input_connected, "launched, but the app has not announced itself");
+    assert!(
+        !session.snapshot().input_connected,
+        "launched, but the app has not announced itself"
+    );
 
     let (addr, _received) = fake_app(&route.token);
     announced(&session, &route, addr);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !session.snapshot().input_connected {
-        assert!(std::time::Instant::now() < deadline, "the session never reported the app as connected");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the session never reported the app as connected"
+        );
         thread::sleep(std::time::Duration::from_millis(5));
     }
 
     session.prepare_input(InputRoute::new(None));
-    assert!(!session.snapshot().input_connected, "a restart forgets the old app");
+    assert!(
+        !session.snapshot().input_connected,
+        "a restart forgets the old app"
+    );
 }
 
 #[test]
@@ -113,7 +147,10 @@ fn an_announcement_nobody_answers_is_not_a_connection() {
     let session = handle();
     let route = InputRoute::new(None);
     // A port nothing listens on: bind and drop.
-    let addr = TcpListener::bind("127.0.0.1:0").expect("bind").local_addr().expect("addr");
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .expect("bind")
+        .local_addr()
+        .expect("addr");
     session.prepare_input(route.clone());
     session.observe_app_message(&announcement(&addr.to_string(), &route.token));
     thread::sleep(std::time::Duration::from_millis(300));
@@ -152,7 +189,10 @@ fn announced(session: &SessionHandle, route: &InputRoute, addr: std::net::Socket
     session.observe_app_message(&announcement(&addr.to_string(), &route.token));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while session.shared.input.lock().unwrap().client.is_none() {
-        assert!(std::time::Instant::now() < deadline, "the session never attached");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the session never attached"
+        );
         thread::sleep(std::time::Duration::from_millis(5));
     }
 }
@@ -168,7 +208,10 @@ fn commands_reach_the_app_in_order_over_the_wire() {
         .send_input(json!({ "commands": ["move 5 6", "down 5 6 primary", "up 5 6 primary"] }))
         .expect("sent");
     assert_eq!(result["sent"], 3);
-    let got: Vec<String> = received.try_iter().filter(|l| !l.starts_with("hello ")).collect();
+    let got: Vec<String> = received
+        .try_iter()
+        .filter(|l| !l.starts_with("hello "))
+        .collect();
     assert_eq!(got, ["move 5 6", "down 5 6 primary", "up 5 6 primary"]);
 }
 
@@ -180,11 +223,19 @@ fn the_session_attaches_under_its_own_name_and_keeps_one_connection() {
     announced(&session, &route, addr);
 
     // Two requests, one connection (the fake app accepts only one).
-    session.send_input(json!({ "commands": ["move 1 2"] })).expect("first");
-    session.send_input(json!({ "commands": ["move 3 4"] })).expect("second");
+    session
+        .send_input(json!({ "commands": ["move 1 2"] }))
+        .expect("first");
+    session
+        .send_input(json!({ "commands": ["move 3 4"] }))
+        .expect("second");
     let lines: Vec<String> = received.try_iter().collect();
     let hellos: Vec<&String> = lines.iter().filter(|l| l.starts_with("hello ")).collect();
-    assert_eq!(hellos, [&format!("hello {} aimer-cli role=launcher", route.token)], "named, and said once");
+    assert_eq!(
+        hellos,
+        [&format!("hello {} aimer-cli role=launcher", route.token)],
+        "named, and said once"
+    );
     assert_eq!(lines.iter().filter(|l| l.starts_with("move")).count(), 2);
 }
 
@@ -194,10 +245,18 @@ fn a_relaunch_lets_go_of_the_old_connection() {
     let route = InputRoute::new(None);
     let (addr, _received) = fake_app(&route.token);
     announced(&session, &route, addr);
-    session.send_input(json!({ "commands": ["move 1 2"] })).expect("sent");
-    assert!(session.shared.input.lock().unwrap().client.is_some(), "kept for the next request");
+    session
+        .send_input(json!({ "commands": ["move 1 2"] }))
+        .expect("sent");
+    assert!(
+        session.shared.input.lock().unwrap().client.is_some(),
+        "kept for the next request"
+    );
     session.prepare_input(InputRoute::new(None));
-    assert!(session.shared.input.lock().unwrap().client.is_none(), "dropped: the old app sees us leave");
+    assert!(
+        session.shared.input.lock().unwrap().client.is_none(),
+        "dropped: the old app sees us leave"
+    );
 }
 
 // ---- who the app is told it is talking to
@@ -228,7 +287,8 @@ fn fake_app_many() -> (std::net::SocketAddr, mpsc::Receiver<(usize, String)>) {
 }
 
 fn next_line(rx: &mpsc::Receiver<(usize, String)>) -> (usize, String) {
-    rx.recv_timeout(std::time::Duration::from_secs(5)).expect("the app heard something")
+    rx.recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the app heard something")
 }
 
 fn announce(session: &SessionHandle, route: &InputRoute, addr: std::net::SocketAddr) {
@@ -243,7 +303,10 @@ fn the_session_tells_the_app_it_is_the_launcher_not_an_agent() {
     let (addr, heard) = fake_app_many();
     announce(&session, &route, addr);
     let (_, hello) = next_line(&heard);
-    assert_eq!(hello, format!("hello {} aimer-cli role=launcher", route.token));
+    assert_eq!(
+        hello,
+        format!("hello {} aimer-cli role=launcher", route.token)
+    );
 }
 
 #[test]
@@ -256,11 +319,19 @@ fn an_agent_lease_is_an_agent_connection_for_as_long_as_it_is_held() {
 
     let lease = session.open_lease("mcp");
     let (number, hello) = next_line(&heard);
-    assert_eq!(hello, format!("hello {} mcp", route.token), "an agent says no role: it is the default");
+    assert_eq!(
+        hello,
+        format!("hello {} mcp", route.token),
+        "an agent says no role: it is the default"
+    );
     assert_ne!(number, 0, "its own connection, not the launcher's");
 
     drop(lease);
-    assert_eq!(next_line(&heard), (number, "<closed>".to_owned()), "letting go disconnects it");
+    assert_eq!(
+        next_line(&heard),
+        (number, "<closed>".to_owned()),
+        "letting go disconnects it"
+    );
 }
 
 #[test]
@@ -274,7 +345,13 @@ fn a_lease_taken_before_the_app_announces_itself_connects_when_it_does() {
     session.observe_app_message(&announcement(&addr.to_string(), &route.token));
     let mut hellos = vec![next_line(&heard).1, next_line(&heard).1];
     hellos.sort();
-    assert_eq!(hellos, [format!("hello {} aimer-cli role=launcher", route.token), format!("hello {} mcp", route.token)]);
+    assert_eq!(
+        hellos,
+        [
+            format!("hello {} aimer-cli role=launcher", route.token),
+            format!("hello {} mcp", route.token)
+        ]
+    );
 }
 
 #[test]
@@ -290,7 +367,12 @@ fn a_relaunched_app_gets_its_agents_back() {
     announce(&session, &route, second);
     let mut hellos = vec![next_line(&heard).1, next_line(&heard).1];
     hellos.sort();
-    assert!(hellos.iter().any(|h| h == &format!("hello {} mcp", route.token)), "{hellos:?}");
+    assert!(
+        hellos
+            .iter()
+            .any(|h| h == &format!("hello {} mcp", route.token)),
+        "{hellos:?}"
+    );
 }
 
 #[test]
@@ -301,18 +383,30 @@ fn a_one_shot_request_is_an_agent_for_a_moment_and_then_not() {
     announce(&session, &route, addr);
     next_line(&heard); // the launcher
 
-    session.send_input(json!({ "commands": ["move 1 2"] })).expect("sent");
+    session
+        .send_input(json!({ "commands": ["move 1 2"] }))
+        .expect("sent");
     let mut lines = Vec::new();
     // The agent says hello, the command goes by the launcher's connection, and
     // after the linger the agent's connection closes.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while std::time::Instant::now() < deadline && !lines.iter().any(|(_, l): &(usize, String)| l == "<closed>") {
+    while std::time::Instant::now() < deadline
+        && !lines.iter().any(|(_, l): &(usize, String)| l == "<closed>")
+    {
         if let Ok(line) = heard.recv_timeout(std::time::Duration::from_millis(100)) {
             lines.push(line);
         }
     }
-    assert!(lines.iter().any(|(_, l)| l == &format!("hello {} cli", route.token)), "{lines:?}");
-    assert!(lines.iter().any(|(_, l)| l == "<closed>"), "it lingers and then leaves: {lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|(_, l)| l == &format!("hello {} cli", route.token)),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|(_, l)| l == "<closed>"),
+        "it lingers and then leaves: {lines:?}"
+    );
 }
 
 #[test]
@@ -333,18 +427,27 @@ fn a_lease_connection_stays_open_while_idle_and_ends_the_lease_when_the_client_g
     let request = json!({ "request_id": "r1", "token": session.shared.token, "operation": "remote_begin", "payload": { "name": "mcp:test" } });
     writeln!(stream, "{request}").expect("send");
     let mut reply = String::new();
-    BufReader::new(stream.try_clone().expect("clone")).read_line(&mut reply).expect("reply");
+    BufReader::new(stream.try_clone().expect("clone"))
+        .read_line(&mut reply)
+        .expect("reply");
     assert!(reply.contains("\"ok\":true"), "{reply}");
 
     // Idle for a while: the lease is still held.
     thread::sleep(std::time::Duration::from_millis(700));
-    assert_eq!(session.shared.input.lock().unwrap().leases.len(), 1, "an idle agent is still there");
+    assert_eq!(
+        session.shared.input.lock().unwrap().leases.len(),
+        1,
+        "an idle agent is still there"
+    );
 
     // The client goes away, and so does the lease.
     drop(stream);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !session.shared.input.lock().unwrap().leases.is_empty() {
-        assert!(std::time::Instant::now() < deadline, "the lease outlived its client");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the lease outlived its client"
+        );
         thread::sleep(std::time::Duration::from_millis(20));
     }
     shutdown.store(true, Ordering::Release);
@@ -363,16 +466,26 @@ fn a_request_adds_no_lingering_agent_while_a_real_one_holds_the_app() {
     // The agent's own commands arrive as requests too. It is already there, so they
     // must not leave a second, shorter-lived agent behind: that one would keep the
     // app looking driven for a few seconds after the real agent has gone.
-    session.send_input(json!({ "commands": ["move 1 2"] })).expect("sent");
+    session
+        .send_input(json!({ "commands": ["move 1 2"] }))
+        .expect("sent");
     thread::sleep(std::time::Duration::from_millis(600));
     let mut lines = Vec::new();
     while let Ok(line) = heard.try_recv() {
         lines.push(line);
     }
-    assert!(!lines.iter().any(|(_, l)| l.contains(" cli")), "no lingering agent: {lines:?}");
+    assert!(
+        !lines.iter().any(|(_, l)| l.contains(" cli")),
+        "no lingering agent: {lines:?}"
+    );
 
     drop(lease);
-    session.send_input(json!({ "commands": ["move 3 4"] })).expect("sent");
+    session
+        .send_input(json!({ "commands": ["move 3 4"] }))
+        .expect("sent");
     let hello = next_line(&heard);
-    assert!(hello.1.contains("closed"), "with nobody holding the app, a one-shot request still counts: {hello:?}");
+    assert!(
+        hello.1.contains("closed"),
+        "with nobody holding the app, a one-shot request still counts: {hello:?}"
+    );
 }

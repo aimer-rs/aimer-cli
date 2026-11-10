@@ -57,13 +57,45 @@ fn host_directory() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow!("could not determine the user home directory"))
 }
 
-/// Stable per-workspace file stem derived from the canonical root.
+/// Fingerprint of the running `aimer` binary: version, path, size and
+/// modification time.
+///
+/// A host keeps serving the tool list it was built with, so a rebuilt or
+/// updated binary must not reuse a host started by an older one. Hosts are keyed
+/// by this fingerprint; an outdated host serves its remaining clients and exits
+/// once idle.
+fn build_id() -> &'static str {
+    static BUILD_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BUILD_ID.get_or_init(|| {
+        let mut hasher = Sha256::new();
+        hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+        if let Ok(exe) = std::env::current_exe() {
+            hasher.update(exe.to_string_lossy().as_bytes());
+            if let Ok(metadata) = fs::metadata(&exe) {
+                hasher.update(metadata.len().to_le_bytes());
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok());
+                if let Some(modified) = modified {
+                    hasher.update(modified.as_nanos().to_le_bytes());
+                }
+            }
+        }
+        hex::encode(&hasher.finalize()[..8])
+    })
+}
+
+/// Stable per-workspace, per-build file stem derived from the canonical root.
 fn host_key(project_root: &Path) -> String {
     let canonical = project_root
         .canonicalize()
         .unwrap_or_else(|_| project_root.to_path_buf());
-    let digest = Sha256::digest(canonical.to_string_lossy().as_bytes());
-    hex::encode(&digest[..8])
+    let mut hasher = Sha256::new();
+    hasher.update(canonical.to_string_lossy().as_bytes());
+    hasher.update([0]);
+    hasher.update(build_id().as_bytes());
+    hex::encode(&hasher.finalize()[..8])
 }
 
 fn record_path(project_root: &Path) -> anyhow::Result<PathBuf> {
@@ -211,6 +243,8 @@ async fn serve_connection(
     server.full_output = handshake.full_output;
     // Each client is its own agent: it holds its own lease, which ends with it.
     server.remote = std::sync::Arc::default();
+    // Each client also follows its own session, so one agent attaching moves no other.
+    server.link = std::sync::Arc::new(server.link.fork());
     let service = server.serve((reader, writer)).await?;
     let result = service.waiting().await;
     drop(connection);
@@ -331,6 +365,16 @@ mod tests {
         assert_eq!(host_key(&one), host_key(&one));
         assert_ne!(host_key(&one), host_key(&two));
         assert_eq!(host_key(&one).len(), 16);
+    }
+
+    #[test]
+    fn host_key_depends_on_the_build() {
+        let root = std::env::temp_dir();
+        let canonical = root.canonicalize().unwrap();
+        let without_build =
+            hex::encode(&Sha256::digest(canonical.to_string_lossy().as_bytes())[..8]);
+        assert_ne!(host_key(&root), without_build);
+        assert_eq!(build_id().len(), 16);
     }
 
     #[test]

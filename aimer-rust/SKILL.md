@@ -23,9 +23,7 @@ Use this workflow for Rust tasks in any workspace or crates selected in Aimer MC
 
 ## Drive the running app
 
-- When an Aimer run session is attached and its app is connected and accepts input (the tools are not listed until it is), the Aimer MCP tools `left_click`, `right_click`, `double_click`, `mouse_move`, `left_click_drag`, `scroll`, `key`, and `type` act on the app like a mouse and keyboard, and `tap`, `swipe`, and `pinch` are the touch equivalents. Coordinates are logical pixels from the top-left corner of the app's window.
-- Use `send_input` for events those do not cover, such as `back invoke`, `link URL`, or `file-drop PATH`. An input tool fails with a reason when the app has not announced an input server, for example in a release build.
-- Check the result with `screenshot`, which returns a picture of the app's window as the app drew it (by default one pixel is one logical pixel, so coordinates in the picture can be passed straight to the input tools), and with `get_logs`. The input tools themselves return only how many events were sent.
+- To run, restart, look at, or operate the app (clicks, typing, screenshots, logs), follow the `aimer-app` skill.
 
 ## Search and inspect
 

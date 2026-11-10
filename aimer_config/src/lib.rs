@@ -574,7 +574,10 @@ mod tests {
         .unwrap();
 
         let loaded = AimerManifest::load_from(dir.path()).unwrap().unwrap();
-        assert_eq!(loaded.assets.get("image_1").map(String::as_str), Some("path"));
+        assert_eq!(
+            loaded.assets.get("image_1").map(String::as_str),
+            Some("path")
+        );
         assert_eq!(
             loaded.assets.get("image_2").map(String::as_str),
             Some("path_2")

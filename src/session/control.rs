@@ -88,11 +88,27 @@ pub(crate) const REMOTE_BEGIN: &str = "remote_begin";
 /// Holds a [`REMOTE_BEGIN`] lease until the client goes away, which is how the
 /// app comes to know an agent has left: the process that held the connection
 /// ended, or let go of it. Whatever else the client sends is ignored.
-fn hold_lease(request: WireRequest, mut stream: TcpStream, mut reader: BufReader<TcpStream>, shared: &Arc<SharedSession>) {
-    let handle = SessionHandle { shared: Arc::clone(shared), run_id: None };
+fn hold_lease(
+    request: WireRequest,
+    mut stream: TcpStream,
+    mut reader: BufReader<TcpStream>,
+    shared: &Arc<SharedSession>,
+) {
+    let handle = SessionHandle {
+        shared: Arc::clone(shared),
+        run_id: None,
+    };
     let _lease = handle.open_lease(request.payload["name"].as_str().unwrap_or("agent"));
-    let reply = WireResponse { request_id: request.request_id, ok: true, result: None, error: None };
-    if serde_json::to_writer(&mut stream, &reply).is_err() || stream.write_all(b"\n").is_err() || stream.flush().is_err() {
+    let reply = WireResponse {
+        request_id: request.request_id,
+        ok: true,
+        result: None,
+        error: None,
+    };
+    if serde_json::to_writer(&mut stream, &reply).is_err()
+        || stream.write_all(b"\n").is_err()
+        || stream.flush().is_err()
+    {
         return;
     }
     // An agent can be idle for as long as it likes: no request timeout applies.
@@ -151,7 +167,11 @@ pub(super) fn snapshot_locked(shared: &SharedSession, state: &SessionState) -> S
         app_process: state.app_process.clone(),
         app_url: state.app_url.clone(),
         resource_monitor: state.resource_monitor.clone(),
-        input_connected: shared.input.lock().expect("input mutex poisoned").is_connected(),
+        input_connected: shared
+            .input
+            .lock()
+            .expect("input mutex poisoned")
+            .is_connected(),
     }
 }
 

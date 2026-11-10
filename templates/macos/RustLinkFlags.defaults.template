@@ -1,0 +1,12 @@
+# The linker flags a freshly scaffolded macOS project starts with, one per line.
+# Blank lines and lines starting with `#` are ignored. They are used until the
+# first macOS build replaces them with the answer of `rustc --print native-static-libs`.
+#
+# The macOS project also spells out the frameworks the windowing and rendering
+# layers need, so this only has to cover bindings that arrive through optional
+# umbrella features (passkeys, for one).
+-framework AppKit
+-framework AuthenticationServices
+-framework Foundation
+-framework Security
+-lobjc

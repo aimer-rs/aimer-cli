@@ -18,8 +18,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "aimer_cli"
-version = "0.10.0"
+name = "aimer"
+version = "26.0.0-dev.2"
 dependencies = [
  "aimer_config",
  "aimer_prendre",

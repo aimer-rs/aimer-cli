@@ -4,9 +4,9 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, anyhow, bail};
 use aimer_prendre::actions::{self, ActionError};
 use aimer_prendre::{Command, PointerButton};
+use anyhow::{Context, anyhow, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use serde_json::json;
 use uuid::Uuid;
@@ -99,7 +99,12 @@ impl InputAction {
     /// The wire lines this action sends.
     fn lines(&self) -> anyhow::Result<Vec<String>> {
         let built: Result<Vec<Command>, ActionError> = match self {
-            Self::Click { x, y, button, count } => {
+            Self::Click {
+                x,
+                y,
+                button,
+                count,
+            } => {
                 let button = match button {
                     Button::Left => PointerButton::Primary,
                     Button::Right => PointerButton::Secondary,
@@ -109,8 +114,16 @@ impl InputAction {
             }
             Self::Move { x, y } => actions::mouse_move(*x, *y),
             Self::Drag { x1, y1, x2, y2 } => actions::drag((*x1, *y1), (*x2, *y2)),
-            Self::Scroll { direction, amount, at } => direction.parse().and_then(|direction| {
-                actions::scroll(at.as_ref().map(|point| (point[0], point[1])), direction, *amount)
+            Self::Scroll {
+                direction,
+                amount,
+                at,
+            } => direction.parse().and_then(|direction| {
+                actions::scroll(
+                    at.as_ref().map(|point| (point[0], point[1])),
+                    direction,
+                    *amount,
+                )
             }),
             Self::Key { spec } => actions::key(spec),
             Self::Type { text } => Ok(vec![actions::typing(text)]),
@@ -119,7 +132,11 @@ impl InputAction {
             Self::Pinch { x, y, scale } => actions::pinch(*x, *y, *scale),
             Self::Send { lines } => return Ok(lines.clone()),
         };
-        Ok(built.map_err(|error| anyhow!("{error}"))?.iter().map(ToString::to_string).collect())
+        Ok(built
+            .map_err(|error| anyhow!("{error}"))?
+            .iter()
+            .map(ToString::to_string)
+            .collect())
     }
 }
 
@@ -134,15 +151,25 @@ pub fn execute(args: &InputArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(super) fn connect(session: Option<Uuid>, project: Option<PathBuf>) -> anyhow::Result<ControlClient> {
+pub(super) fn connect(
+    session: Option<Uuid>,
+    project: Option<PathBuf>,
+) -> anyhow::Result<ControlClient> {
     let registry = SessionRegistry::default_location()?;
     if let Some(id) = session {
         return registry.attach(id);
     }
-    let project = project.map(super::sessions::resolve_project_path).transpose()?;
+    let project = project
+        .map(super::sessions::resolve_project_path)
+        .transpose()?;
     let sessions = registry.live(project.as_deref())?;
     let chosen = choose(sessions, |s| {
-        format!("  {}  {}  {}", s.session_id, s.target, s.project_root.display())
+        format!(
+            "  {}  {}  {}",
+            s.session_id,
+            s.target,
+            s.project_root.display()
+        )
     })?;
     Ok(ControlClient::new(chosen))
 }
@@ -155,7 +182,10 @@ fn choose<T>(mut sessions: Vec<T>, describe: impl Fn(&T) -> String) -> anyhow::R
         1 => Ok(sessions.remove(0)),
         _ => {
             let listing: Vec<String> = sessions.iter().map(describe).collect();
-            bail!("several live sessions; choose one with --session:\n{}", listing.join("\n"))
+            bail!(
+                "several live sessions; choose one with --session:\n{}",
+                listing.join("\n")
+            )
         }
     }
 }
@@ -174,20 +204,32 @@ mod tests {
     fn lines(args: &[&str]) -> Vec<String> {
         let cli = Cli::try_parse_from(std::iter::once("input").chain(args.iter().copied()))
             .unwrap_or_else(|e| panic!("{args:?}: {e}"));
-        cli.input.action.lines().unwrap_or_else(|e| panic!("{args:?}: {e}"))
+        cli.input
+            .action
+            .lines()
+            .unwrap_or_else(|e| panic!("{args:?}: {e}"))
     }
 
     #[test]
     fn a_click_is_the_wire_lines_of_a_click() {
-        assert_eq!(lines(&["click", "10", "20"]), ["glide 10 20", "down 10 20 primary", "up 10 20 primary"]);
-        assert_eq!(lines(&["click", "1", "2", "--button", "right"])[1], "down 1 2 secondary");
+        assert_eq!(
+            lines(&["click", "10", "20"]),
+            ["glide 10 20", "down 10 20 primary", "up 10 20 primary"]
+        );
+        assert_eq!(
+            lines(&["click", "1", "2", "--button", "right"])[1],
+            "down 1 2 secondary"
+        );
         assert_eq!(lines(&["click", "1", "2", "--count", "2"]).len(), 5);
     }
 
     #[test]
     fn a_click_without_a_point_is_where_the_pointer_already_is() {
         assert_eq!(lines(&["click"]), ["down primary", "up primary"]);
-        assert_eq!(lines(&["click", "--button", "right", "--count", "2"]).len(), 4);
+        assert_eq!(
+            lines(&["click", "--button", "right", "--count", "2"]).len(),
+            4
+        );
         // A point is both numbers or neither.
         assert!(Cli::try_parse_from(["input", "click", "5"]).is_err());
     }
@@ -198,9 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn a_scroll_is_a_smooth_trackpad_swipe_of_three_steps_by_default_and_glides_first_only_when_told_where() {
+    fn a_scroll_is_a_smooth_trackpad_swipe_of_three_steps_by_default_and_glides_first_only_when_told_where()
+     {
         // A step is 40 pixels, and down moves the content up.
-        assert_eq!(lines(&["scroll", "down"]), ["trackpad 0 -120"], "where the mouse already is");
+        assert_eq!(
+            lines(&["scroll", "down"]),
+            ["trackpad 0 -120"],
+            "where the mouse already is"
+        );
         assert_eq!(lines(&["scroll", "UP", "5"]), ["trackpad 0 200"]);
         assert_eq!(
             lines(&["scroll", "down", "2", "--at", "10", "-20"]),
@@ -212,27 +259,51 @@ mod tests {
     fn a_drag_is_a_glide_a_press_a_glide_and_a_release() {
         assert_eq!(
             lines(&["drag", "0", "0", "-10", "-20"]),
-            ["glide 0 0", "down 0 0 primary", "glide -10 -20", "up -10 -20 primary"]
+            [
+                "glide 0 0",
+                "down 0 0 primary",
+                "glide -10 -20",
+                "up -10 -20 primary"
+            ]
         );
     }
 
     #[test]
     fn keys_and_text_and_raw_lines_pass_through() {
-        assert_eq!(lines(&["key", "ctrl+a"]), ["key press ctrl other:a", "key release ctrl other:a"]);
+        assert_eq!(
+            lines(&["key", "ctrl+a"]),
+            ["key press ctrl other:a", "key release ctrl other:a"]
+        );
         assert_eq!(lines(&["type", "hello world"]), ["typing - hello world"]);
-        assert_eq!(lines(&["send", "back invoke", "link aimer://x"]), ["back invoke", "link aimer://x"]);
+        assert_eq!(
+            lines(&["send", "back invoke", "link aimer://x"]),
+            ["back invoke", "link aimer://x"]
+        );
     }
 
     #[test]
     fn touch_gestures_use_one_finger() {
-        assert_eq!(lines(&["tap", "7", "8"]), ["touch start 1 7 8", "touch end 1 7 8"]);
-        assert_eq!(lines(&["swipe", "0", "100", "0", "0"]).first().map(String::as_str), Some("touch start 1 0 100"));
+        assert_eq!(
+            lines(&["tap", "7", "8"]),
+            ["touch start 1 7 8", "touch end 1 7 8"]
+        );
+        assert_eq!(
+            lines(&["swipe", "0", "100", "0", "0"])
+                .first()
+                .map(String::as_str),
+            Some("touch start 1 0 100")
+        );
     }
 
     #[test]
     fn a_bad_action_is_an_error_not_a_partial_send() {
-        for args in [&["scroll", "sideways"][..], &["key", "ctrl+"], &["click", "1", "2", "--count", "9"]] {
-            let cli = Cli::try_parse_from(std::iter::once("input").chain(args.iter().copied())).unwrap();
+        for args in [
+            &["scroll", "sideways"][..],
+            &["key", "ctrl+"],
+            &["click", "1", "2", "--count", "9"],
+        ] {
+            let cli =
+                Cli::try_parse_from(std::iter::once("input").chain(args.iter().copied())).unwrap();
             assert!(cli.input.action.lines().is_err(), "{args:?}");
         }
     }
@@ -241,8 +312,18 @@ mod tests {
     fn exactly_one_live_session_is_chosen_and_anything_else_says_why() {
         let name = |s: &&str| format!("  {s}");
         assert_eq!(choose(vec!["only"], name).unwrap(), "only");
-        assert!(choose(Vec::<&str>::new(), name).unwrap_err().to_string().contains("aimer run"));
-        let many = choose(vec!["first", "second"], name).unwrap_err().to_string();
-        assert!(many.contains("--session") && many.contains("first") && many.contains("second"), "{many}");
+        assert!(
+            choose(Vec::<&str>::new(), name)
+                .unwrap_err()
+                .to_string()
+                .contains("aimer run")
+        );
+        let many = choose(vec!["first", "second"], name)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            many.contains("--session") && many.contains("first") && many.contains("second"),
+            "{many}"
+        );
     }
 }

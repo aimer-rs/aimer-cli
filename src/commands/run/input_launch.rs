@@ -52,7 +52,15 @@ pub(super) fn enable(ctx: &RunContext, ip: Option<IpAddr>) -> Vec<(&'static str,
 pub(super) fn device_address(device_id: &str) -> Option<IpAddr> {
     let path = std::env::temp_dir().join(format!("aimer-device-{}.json", Uuid::new_v4()));
     let status = Command::new("xcrun")
-        .args(["devicectl", "device", "info", "details", "--device", device_id, "--json-output"])
+        .args([
+            "devicectl",
+            "device",
+            "info",
+            "details",
+            "--device",
+            device_id,
+            "--json-output",
+        ])
         .arg(&path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -71,7 +79,9 @@ pub(super) fn device_address(device_id: &str) -> Option<IpAddr> {
 /// `devicectl device info details` writes.
 fn tunnel_address(json: &str) -> Option<IpAddr> {
     let value: Value = serde_json::from_str(json).ok()?;
-    let address = value.pointer("/result/connectionProperties/tunnelIPAddress")?.as_str()?;
+    let address = value
+        .pointer("/result/connectionProperties/tunnelIPAddress")?
+        .as_str()?;
     // A scope id (`fd00::1%utun3`) is not part of the address.
     address.split('%').next()?.parse().ok()
 }
@@ -84,7 +94,10 @@ mod tests {
     fn the_tunnel_address_is_read_from_the_connection_properties() {
         let json = r#"{"info":{"outcome":"success"},"result":{"connectionProperties":{
             "transportType":"wired","tunnelIPAddress":"fd5c:7b1e:3a22::1","tunnelState":"connected"}}}"#;
-        assert_eq!(tunnel_address(json), Some("fd5c:7b1e:3a22::1".parse().unwrap()));
+        assert_eq!(
+            tunnel_address(json),
+            Some("fd5c:7b1e:3a22::1".parse().unwrap())
+        );
     }
 
     #[test]
@@ -92,8 +105,14 @@ mod tests {
         let with = |address: &str| {
             format!(r#"{{"result":{{"connectionProperties":{{"tunnelIPAddress":"{address}"}}}}}}"#)
         };
-        assert_eq!(tunnel_address(&with("fe80::1%utun3")), Some("fe80::1".parse().unwrap()));
-        assert_eq!(tunnel_address(&with("10.0.0.7")), Some("10.0.0.7".parse().unwrap()));
+        assert_eq!(
+            tunnel_address(&with("fe80::1%utun3")),
+            Some("fe80::1".parse().unwrap())
+        );
+        assert_eq!(
+            tunnel_address(&with("10.0.0.7")),
+            Some("10.0.0.7".parse().unwrap())
+        );
     }
 
     #[test]

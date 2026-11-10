@@ -1,9 +1,8 @@
-use crate::commands::mcp_cargo::{common::MAX_TOOL_OUTPUT_BYTES, manifest::apply_manifest_operation};
-
-use super::{
-    ManifestOperation, ManifestOperationAction, project_metadata_value,
-    resolve_manifest,
+use crate::commands::mcp_cargo::{
+    common::MAX_TOOL_OUTPUT_BYTES, manifest::apply_manifest_operation,
 };
+
+use super::{ManifestOperation, ManifestOperationAction, project_metadata_value, resolve_manifest};
 use serde_json::json;
 use std::fs;
 use toml_edit::DocumentMut;
@@ -21,7 +20,6 @@ fn generic_manifest_edits_preserve_comments_and_replace_values() {
             value: Some(json!({ "version": "2", "features": ["derive"] })),
         },
     )
-
     .unwrap();
     let source = document.to_string();
     assert!(source.contains("# keep this comment"));

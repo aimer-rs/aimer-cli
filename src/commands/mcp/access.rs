@@ -79,6 +79,10 @@ pub(super) fn access_class(tool: &str) -> Access {
         | "get_call_hierarchy"
         | "expand_macro"
         | "status"
+        // Only change which session this connection controls.
+        | "list_sessions"
+        | "attach_session"
+        | "detach_session"
         | "get_logs"
         | "get_resource_usage"
         | "list_resource_recordings"

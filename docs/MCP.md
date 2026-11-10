@@ -7,13 +7,32 @@ diagnose, and control your running application directly.
 
 ## Supported AI Agents
 
-- **Claude Code** (`claude` / `claude-code`)
-- **Cursor** (`cursor`)
-- **Codex** (`codex`)
+| Agent | `--install` name | Configuration file |
+|---|---|---|
+| Claude Code | `claude` / `claude-code` | `~/.claude.json` |
+| Codex | `codex` | `~/.codex/config.toml` (`$CODEX_HOME` is honored) |
+| Cursor | `cursor` | `~/.cursor/mcp.json` |
+| Gemini CLI | `gemini-cli` | `~/.gemini/settings.json` |
+| Windsurf | `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
+| Qwen Code | `qwen-code` | `~/.qwen/settings.json` |
+| Kiro CLI | `kiro-cli` | `~/.kiro/settings/mcp.json` |
+| Junie | `junie` | `~/.junie/mcp/mcp.json` |
+| iFlow CLI | `iflow-cli` | `~/.iflow/settings.json` |
+| Augment | `augment` | `~/.augment/settings.json` |
+| CodeBuddy | `codebuddy` | `~/.codebuddy/mcp.json` |
+| Kimi Code CLI | `kimi-code-cli` | `~/.kimi/mcp.json` |
+| Droid | `droid` | `~/.factory/mcp.json` |
+| GitHub Copilot CLI | `github-copilot` | `~/.copilot/mcp-config.json` |
+| OpenCode | `opencode` | `~/.config/opencode/opencode.json` |
+| Crush | `crush` | `~/.config/crush/crush.json` |
+| Amp | `amp` | `~/.config/amp/settings.json` |
+
+Run `aimer mcp --install` without an agent to print this list.
 
 ## Installing MCP Integration
 
-Install the Aimer MCP server entry directly into your agent's configuration:
+Install the Aimer MCP server entry directly into your agent's user-level configuration. The installation is global:
+it is not tied to any project, and there is no per-project installation.
 
 ```bash
 # Configure for Claude Code
@@ -25,12 +44,15 @@ aimer mcp --install cursor
 # Configure for Codex
 aimer mcp --install codex
 
-# Install globally across all projects
-aimer mcp --install claude --global
+# Configure several agents at once
+aimer mcp --install claude,cursor,codex
 
-# Bind MCP to a regular Rust project
-aimer mcp --install claude --project /path/to/rust-project
+# List the supported agents
+aimer mcp --install
 ```
+
+Existing settings and other MCP servers in an agent's file are preserved; only the `aimer` entry is written. The file
+must be strict JSON (no comments).
 
 To only see the configuration without changing any agent's files, print it instead:
 
@@ -40,16 +62,14 @@ aimer mcp --json
 
 # TOML entry (`mcp_servers`), the format used by Codex
 aimer mcp --toml
-
-# Unbound entry, or bound to a specific project
-aimer mcp --json --global
-aimer mcp --toml --project /path/to/rust-project
 ```
 
-`--json` and `--toml` write only to stdout. They cannot be combined with each other, `--install`, or `--attach`.
+`--json` and `--toml` write only to stdout. They cannot be combined with each other, `--install`, `--project`, or
+`--attach`.
 
-For a global install, start Claude Code from inside a Rust project containing `Cargo.toml` or an Aimer project
-containing `Aimer.toml`. Rust navigation, editing, Cargo, and crate documentation tools work in either project type.
+The installed entry runs `aimer mcp` without a project path. Start your agent from inside a Rust project containing
+`Cargo.toml` or an Aimer project containing `Aimer.toml`. Rust navigation, editing, Cargo, and crate documentation
+tools work in either project type.
 Aimer session controls need a live Aimer session; resource recording history needs an Aimer project.
 
 ## Available MCP Tools
@@ -57,6 +77,7 @@ Aimer session controls need a live Aimer session; resource recording history nee
 Once connected, your AI assistant can execute the following tools:
 
 - `status`: Inspect the current run state, process ID, runtime, and target device.
+- `list_sessions`, `attach_session`, and `detach_session`: Choose which live Aimer session this connection controls. `list_sessions` shows the live sessions of the workspace (or of every project with `all_projects`), marks the attached one, and reports the mode: `automatic`, `pinned`, or `detached`. `attach_session` with a `session_id` pins that session; without one it goes back to automatic. `detach_session` controls no session until the next attach. They change only the calling connection, so agents sharing a workspace host do not move each other. See [Choosing the session](#choosing-the-session).
 - `restart_project`: Trigger a clean restart and rebuild of the app, waiting for the new run.
 - `stop_project`: Stop the running project session.
 - `get_logs`: Fetch bounded build, app, or system logs with cursor pagination and source code locations.
@@ -128,7 +149,7 @@ Tool calls follow a readers-writer rule, with a fair queue so a waiting write is
 
 | Class | Tools | Rule |
 |---|---|---|
-| Read | search, find, hover, `inspect_file`, diagnostics, docs, `get_*`, and every preview tool (`preview_edit`, `rename_symbol`, `format`, `preview_code_action`, `preview_manifest_edit`) | Any number at once |
+| Read | search, find, hover, `inspect_file`, diagnostics, docs, `get_*`, `list_sessions`, `attach_session`, `detach_session` (they change only the calling connection), and every preview tool (`preview_edit`, `rename_symbol`, `format`, `preview_code_action`, `preview_manifest_edit`) | Any number at once |
 | Build | `cargo_check`, `cargo_test`, `cargo_run`, `check` | Run beside reads, one at a time |
 | Write | `apply_edit`, `start_lsp` | Runs alone |
 | Session | `restart_project`, `stop_project`, `clear_logs`, `set_resource_monitor_interval`, `record_resource_usage`, and every input tool (`left_click`, `key`, `type`, `scroll`, `tap`, `send_input`, `screenshot`, ...) | One at a time; control the running app, not the workspace files |
@@ -137,7 +158,23 @@ A call that cannot get its lock within a minute (five for builds) returns a `bus
 
 Previews and code actions belong to the client that created them: another client cannot apply them, and they are dropped when that client disconnects. A preview still fails if its files changed since it was made. `status` lists connected clients and lock holders when the workspace is shared.
 
+A host belongs to the `aimer` binary that started it. After you rebuild or update `aimer`, the next `aimer mcp` starts a fresh host, so new tools appear without manual cleanup. The older host keeps serving the agents still connected to it and exits after about a minute without clients. An agent that is already connected keeps its old tool list until it reconnects its MCP server.
+
 Output format (`--full-output`) is chosen per client. Pass `--standalone` to keep the old one-process-per-client behavior. `--attach` always serves standalone, because it is bound to one live session. If no host can be reached, `aimer mcp` falls back to standalone automatically.
+
+### Choosing the session
+
+Each agent connection controls at most one live Aimer session, and that choice can change while the connection lives. A connection is in one of three modes, reported by `list_sessions`:
+
+| Mode | Behaviour |
+|---|---|
+| `automatic` | The default. When the workspace has exactly one live session, the connection attaches to it, including a session started with `aimer run` after the agent connected. A session that ends is let go. With several live sessions nothing is chosen for the agent, and a session already attached stays while it is alive. |
+| `pinned` | `attach_session` with a `session_id`, or `aimer mcp --attach <ID>`. The connection stays on that session whatever else is alive. |
+| `detached` | `detach_session`. No session is controlled, and none is picked automatically, until `attach_session` is called. |
+
+`attach_session` without a `session_id` returns the connection to `automatic`. In automatic mode the registry is looked at again on session tool calls and about once a second, so a new session is found within a second. The tool list is refreshed with a tool-list-changed notification when the session or its app changes.
+
+The choice belongs to one connection. Agents that share a workspace host each follow their own session, so one agent attaching, or detaching, does not move another. A session of another project can be attached by ID; the Rust, Cargo and documentation tools keep working on the workspace the server was started for.
 
 ### Rust engine configuration
 

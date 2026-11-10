@@ -137,27 +137,25 @@ enum Commands {
             .multiple(true)
     ))]
     Mcp {
-        /// Install the Aimer MCP server for one or more supported agents.
+        /// Install the Aimer MCP server globally for one or more supported
+        /// agents. The entry is not bound to any project. Without an agent,
+        /// lists the supported agents.
         #[arg(
             long,
             value_name = "AGENT",
-            num_args = 1..,
+            num_args = 0..,
             value_delimiter = ',',
-            conflicts_with_all = ["attach", "json", "toml"]
+            conflicts_with_all = ["attach", "json", "toml", "project"]
         )]
         install: Option<Vec<String>>,
-        /// Print the MCP server entry as JSON (Claude Code / Cursor format)
-        /// without installing it.
-        #[arg(long, conflicts_with_all = ["attach", "toml"])]
+        /// Print the global MCP server entry as JSON (Claude Code / Cursor
+        /// format) without installing it.
+        #[arg(long, conflicts_with_all = ["attach", "toml", "project"])]
         json: bool,
-        /// Print the MCP server entry as TOML (Codex format) without
+        /// Print the global MCP server entry as TOML (Codex format) without
         /// installing it.
-        #[arg(long, conflicts_with_all = ["attach", "json"])]
+        #[arg(long, conflicts_with_all = ["attach", "json", "project"])]
         toml: bool,
-        /// Use the user's global agent configuration instead of binding the
-        /// entry to the current project (with --install, --json or --toml).
-        #[arg(long, requires = "config_target", conflicts_with_all = ["project", "attach"])]
-        global: bool,
         /// Project path used for automatic session discovery.
         #[arg(long, conflicts_with = "attach")]
         project: Option<std::path::PathBuf>,
@@ -179,11 +177,12 @@ enum Commands {
 
     /// Install Aimer's Rust workflow skill for one or more coding agents.
     Skill {
-        /// Install the user-level skill for codex, claude, or cursor.
+        /// Install the user-level skill for one or more agents. Without an
+        /// agent, lists the supported agents.
         #[arg(
             long,
             value_name = "AGENT",
-            num_args = 1..,
+            num_args = 0..,
             value_delimiter = ',',
             required = true
         )]
@@ -283,6 +282,12 @@ enum Commands {
         /// Target to migrate (macos, windows, linux, android, ios, web, all)
         #[arg(value_enum)]
         target: MigrateTarget,
+
+        /// Also replace scaffold files you may have edited (Info.plist,
+        /// project.pbxproj, AndroidManifest.xml, icons, ...). Without it
+        /// they are kept as they are.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Manage the tools Aimer installs into ~/.aimer/bin (lists them by default)
@@ -410,33 +415,23 @@ fn main() -> anyhow::Result<()> {
             install,
             json,
             toml,
-            global,
             full_output,
             standalone,
             host,
         }) => {
-            let scope = || -> anyhow::Result<commands::mcp_install::InstallScope> {
-                Ok(if *global {
-                    commands::mcp_install::InstallScope::Global
-                } else {
-                    commands::mcp_install::InstallScope::Project(
-                        project.clone().unwrap_or(std::env::current_dir()?),
-                    )
-                })
-            };
             if *json || *toml {
                 let format = if *json {
                     commands::mcp_install::ConfigFormat::Json
                 } else {
                     commands::mcp_install::ConfigFormat::Toml
                 };
-                println!(
-                    "{}",
-                    commands::mcp_install::render_config(format, scope()?)?
-                );
+                println!("{}", commands::mcp_install::render_config(format)?);
             } else if let Some(agents) = install {
-                let scope = scope()?;
-                let reports = commands::mcp_install::install(agents, scope)?;
+                if agents.is_empty() {
+                    print!("{}", commands::mcp_install::list_agents());
+                    return Ok(());
+                }
+                let reports = commands::mcp_install::install(agents)?;
                 for report in reports {
                     let state = if report.changed {
                         "installed"
@@ -461,6 +456,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Commands::Skill { install }) => {
+            if install.is_empty() {
+                print!("{}", commands::skill_install::list_agents());
+                return Ok(());
+            }
             let reports = commands::skill_install::install(install)?;
             for report in reports {
                 let state = if report.changed {
@@ -469,7 +468,8 @@ fn main() -> anyhow::Result<()> {
                     "already installed"
                 };
                 println!(
-                    "Aimer Rust skill {state} for {} in {}",
+                    "Skill {} {state} for {} in {}",
+                    report.skill,
                     report.agent,
                     report.path.display()
                 );
@@ -558,8 +558,8 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Completions { shell, install }) => {
             commands::completions::execute(*shell, *install)?;
         }
-        Some(Commands::Migrate { target }) => {
-            commands::migrate::execute(target.as_str().to_string())?;
+        Some(Commands::Migrate { target, force }) => {
+            commands::migrate::execute(target.as_str().to_string(), *force)?;
         }
         None => {
             Cli::parse_from(["aimer", "--help"]);
@@ -789,18 +789,30 @@ mod tests {
 
     #[cfg(feature = "mcp")]
     #[test]
-    fn mcp_global_install_accepts_multiple_agents() {
-        let cli = Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "claude", "--global"])
-            .unwrap();
+    fn mcp_install_accepts_multiple_agents() {
+        let cli = Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "claude"]).unwrap();
 
         assert!(matches!(
             cli.command,
             Some(Commands::Mcp {
                 install: Some(agents),
-                global: true,
                 ..
             }) if agents == vec!["codex", "claude"]
         ));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn bare_install_flags_parse_with_no_agents() {
+        assert!(matches!(
+            Cli::try_parse_from(["aimer", "mcp", "--install"]).unwrap().command,
+            Some(Commands::Mcp { install: Some(agents), .. }) if agents.is_empty()
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["aimer", "skill", "--install"]).unwrap().command,
+            Some(Commands::Skill { install }) if install.is_empty()
+        ));
+        assert!(Cli::try_parse_from(["aimer", "skill"]).is_err());
     }
 
     #[cfg(feature = "mcp")]
@@ -833,21 +845,21 @@ mod tests {
 
     #[cfg(feature = "mcp")]
     #[test]
-    fn mcp_global_flag_requires_install() {
+    fn mcp_global_flag_is_removed() {
         assert!(Cli::try_parse_from(["aimer", "mcp", "--global"]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "--global"]).is_err());
     }
 
     #[cfg(feature = "mcp")]
     #[test]
     fn mcp_json_and_toml_print_without_installing() {
-        let cli = Cli::try_parse_from(["aimer", "mcp", "--json", "--global"]).unwrap();
+        let cli = Cli::try_parse_from(["aimer", "mcp", "--json"]).unwrap();
         assert!(matches!(
             cli.command,
             Some(Commands::Mcp {
                 json: true,
                 toml: false,
                 install: None,
-                global: true,
                 ..
             })
         ));
@@ -859,19 +871,12 @@ mod tests {
 
     #[cfg(feature = "mcp")]
     #[test]
-    fn mcp_install_rejects_global_project_and_exact_attach_combinations() {
+    fn mcp_install_rejects_project_and_exact_attach_combinations() {
         assert!(
-            Cli::try_parse_from([
-                "aimer",
-                "mcp",
-                "--install",
-                "codex",
-                "--global",
-                "--project",
-                "."
-            ])
-            .is_err()
+            Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "--project", "."]).is_err()
         );
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--json", "--project", "."]).is_err());
+        assert!(Cli::try_parse_from(["aimer", "mcp", "--toml", "--project", "."]).is_err());
         assert!(
             Cli::try_parse_from(["aimer", "mcp", "--install", "codex", "--attach", "abc"]).is_err()
         );
@@ -909,9 +914,8 @@ mod tests {
                 force: false
             })
         ));
-        let cli =
-            Cli::try_parse_from(["aimer", "update", "--check", "--to", "0.9.1", "--force"])
-                .unwrap();
+        let cli = Cli::try_parse_from(["aimer", "update", "--check", "--to", "0.9.1", "--force"])
+            .unwrap();
         let Some(Commands::Update {
             check,
             version,
