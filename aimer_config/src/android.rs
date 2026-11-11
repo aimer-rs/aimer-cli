@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::AndroidPermissionsMeta;
+
 /// Settings that only apply to the Android target.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AndroidMeta {
@@ -12,6 +14,10 @@ pub struct AndroidMeta {
     /// every upload; when unset it is derived from `[package] version`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_code: Option<u32>,
+    /// The `[android.permissions]` table: permissions the portable
+    /// `[permissions]` table has no key for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<AndroidPermissionsMeta>,
 }
 
 /// Signing settings for `aimer package android`.

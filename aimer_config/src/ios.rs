@@ -1,5 +1,7 @@
 //! The `[ios]` table of `Aimer.toml`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Settings that only apply to the iOS target.
@@ -8,6 +10,11 @@ pub struct IosMeta {
     /// The `[ios.signing]` table used by `aimer package ios`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signing: Option<IosSigningMeta>,
+    /// The `[ios.permissions]` table: raw `Info.plist` keys and their string
+    /// values, for what the portable `[permissions]` table does not cover.
+    /// They win over the portable keys.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub permissions: BTreeMap<String, String>,
 }
 
 /// Signing and distribution settings for `aimer package ios`.

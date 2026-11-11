@@ -26,6 +26,7 @@ mod mcp_ra;
 mod mcp_ra_engine;
 pub mod migrate;
 pub mod package;
+pub(crate) mod permissions;
 mod project_selection;
 pub mod run;
 pub mod screenshot;

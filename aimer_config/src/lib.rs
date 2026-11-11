@@ -7,10 +7,12 @@ use serde::{Deserialize, Serialize};
 mod android;
 mod ios;
 mod macos;
+mod permissions;
 
 pub use android::{AndroidMeta, AndroidSigningMeta};
 pub use ios::{IosMeta, IosSigningMeta};
 pub use macos::{MacosMeta, MacosSigningMeta};
+pub use permissions::{AndroidPermissionsMeta, AndroidUse, Permissions};
 
 /// User-level configuration stored at `~/.aimer/config.toml`.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -238,6 +240,10 @@ pub struct AimerManifest {
     /// The `[fonts]` table: font name to project-relative file path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub fonts: BTreeMap<String, String>,
+    /// The `[permissions]` table: what the app may access, translated into
+    /// `Info.plist` keys and Android permissions by `aimer assemble`.
+    #[serde(default, skip_serializing_if = "Permissions::is_empty")]
+    pub permissions: Permissions,
     /// The `[macos]` table: settings that only apply to the macOS target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub macos: Option<MacosMeta>,
@@ -282,6 +288,7 @@ impl AimerManifest {
             build: None,
             assets: BTreeMap::new(),
             fonts: BTreeMap::new(),
+            permissions: Permissions::default(),
             macos: None,
             ios: None,
             android: None,

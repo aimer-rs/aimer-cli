@@ -417,6 +417,8 @@ pub(crate) fn package_macos(
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<String> {
+    crate::commands::permissions::sync_macos(pkg_name, reporter)?;
+
     let lib_name = lib_name_of(pkg_name);
     let src_lib = artifact_path(MACOS_RUST_TARGET, &lib_name, release, ".a");
     copy_lib(
@@ -576,6 +578,8 @@ pub(crate) fn stage_ios_inputs(
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<()> {
+    crate::commands::permissions::sync_ios(pkg_name, reporter)?;
+
     let lib_name = lib_name_of(pkg_name);
     let src_lib = artifact_path(plan.rust_target, &lib_name, release, ".a");
     copy_lib(
@@ -736,6 +740,8 @@ pub(crate) fn stage_android_inputs(
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<()> {
+    crate::commands::permissions::sync_android(reporter)?;
+
     let lib_name = lib_name_of(pkg_name);
     let src_lib = artifact_path(plan.rust_target, &lib_name, release, ".so");
     copy_lib(

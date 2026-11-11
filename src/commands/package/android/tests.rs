@@ -19,6 +19,7 @@ fn meta() -> AndroidMeta {
             key_alias: Some("upload".into()),
         }),
         version_code: None,
+        ..AndroidMeta::default()
     }
 }
 
@@ -97,6 +98,7 @@ fn every_missing_setting_names_where_to_set_it() {
             key_alias: None,
         }),
         version_code: None,
+        ..AndroidMeta::default()
     };
     let no_alias = resolve(Some(&only_keystore), &[PASSWORD], "1.0.0")
         .unwrap_err()

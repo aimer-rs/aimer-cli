@@ -236,9 +236,9 @@ final class KeyboardForwardingTextView: UITextView, UITextViewDelegate {
             end: composingEnd,
             utf16Length: snapshot.utf16.count
         )
-        #if DEBUG
-        print("[aimer:kbd] snapshot rev=\(revision) text=\(debugQuote(snapshot)) sel=\(selection) newSession=\(newSession)")
-        #endif
+        // #if DEBUG
+        // print("[aimer:kbd] snapshot rev=\(revision) text=\(debugQuote(snapshot)) sel=\(selection) newSession=\(newSession)")
+        // #endif
         if traitsChanged && isFirstResponder {
             reloadInputViews()
         }
