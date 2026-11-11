@@ -133,6 +133,19 @@ aimer assemble web --release
 aimer assemble android -p moewmoew
 ```
 
+**Live activities (iOS).** When the project's `Cargo.toml` turns on the `live-activity` feature of `aimer` (or
+depends on `aimer_live_activity`), the iOS build sets up the Swift side by itself and says what it changed:
+
+- `builds/ios/<package>/AimerLiveActivityBridge.swift` and `AimerLiveActivityAttributes.swift`, added to the app target;
+- `builds/ios/<package>LiveActivity/`, a widget extension that holds only a live activity, with its own `Info.plist`;
+- `NSSupportsLiveActivities` in the app's `Info.plist`;
+- the extension target in `project.pbxproj`, built and embedded with the app. Its bundle identifier is the app's with
+  `.LiveActivity` added, so that App ID and a signing profile have to exist before the app ships.
+
+Existing files are never overwritten, so the generated SwiftUI in `AimerLiveActivityWidget.swift` can be edited into
+the app's own layout. A second build changes nothing. A project file that has moved too far from the scaffold is left
+untouched and the build prints what to add by hand.
+
 ---
 
 ## `aimer package`

@@ -11,6 +11,7 @@ pub mod docs;
 pub mod doctor;
 pub mod init;
 pub mod input;
+pub mod live_activity;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 #[cfg(feature = "mcp")]

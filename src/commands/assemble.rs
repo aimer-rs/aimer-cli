@@ -578,6 +578,7 @@ pub(crate) fn stage_ios_inputs(
     release: bool,
     reporter: &dyn Reporter,
 ) -> anyhow::Result<()> {
+    crate::commands::live_activity::sync_ios(pkg_name, reporter)?;
     crate::commands::permissions::sync_ios(pkg_name, reporter)?;
 
     let lib_name = lib_name_of(pkg_name);
